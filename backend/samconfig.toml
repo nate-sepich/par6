@@ -1,0 +1,28 @@
+# SAM CLI configuration file for Par6 Golf Backend
+
+version = 0.1
+
+[default.global.parameters]
+stack_name = "par6-golf-backend"
+
+[default.build.parameters]
+cached = true
+parallel = true
+
+[default.deploy.parameters]
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+resolve_s3 = true
+s3_prefix = "par6-golf"
+region = "us-west-2"  # Change to your preferred region
+image_repositories = []
+parameter_overrides = "Environment=dev"
+
+[staging.deploy.parameters]
+parameter_overrides = "Environment=staging"
+stack_name = "par6-golf-backend-staging"
+
+[prod.deploy.parameters]
+parameter_overrides = "Environment=prod"
+stack_name = "par6-golf-backend-prod"
+confirm_changeset = false
