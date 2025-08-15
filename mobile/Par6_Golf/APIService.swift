@@ -257,10 +257,13 @@ class APIService: ObservableObject {
     }
     
     func getTournaments() async throws -> [TournamentSummary] {
-        return try await makeRequest(
+        print("[DEBUG] Making API call to GET /tournaments")
+        let result: [TournamentSummary] = try await makeRequest(
             endpoint: "/tournaments",
             requiresAuth: true
         )
+        print("[DEBUG] API returned \(result.count) tournaments")
+        return result
     }
     
     func joinTournament(tournamentId: String) async throws -> Tournament {

@@ -608,8 +608,11 @@ struct TournamentView: View {
         defer { isLoading = false }
         
         do {
+            print("[DEBUG] Loading tournaments from API...")
             tournaments = try await apiService.getTournaments()
+            print("[DEBUG] Loaded \(tournaments.count) tournaments")
         } catch {
+            print("[DEBUG] Failed to load tournaments: \(error)")
             alertMessage = "Failed to load tournaments: \(error.localizedDescription)"
             showingAlert = true
         }
