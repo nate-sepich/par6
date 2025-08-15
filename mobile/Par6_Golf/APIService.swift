@@ -47,8 +47,12 @@ class APIService: ObservableObject {
     @Published var sessionToken: String?
     @Published var currentUser: User?
     
+    private let keychain = "par6_session_token"
+    private let userDefaults = UserDefaults.standard
+    
     private init() {
         setupDateFormatting()
+        restoreSession()
     }
     
     private func setupDateFormatting() {
@@ -56,6 +60,61 @@ class APIService: ObservableObject {
         formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSSSS"
         decoder.dateDecodingStrategy = .formatted(formatter)
         encoder.dateEncodingStrategy = .formatted(formatter)
+    }
+    
+    // MARK: - Session Persistence
+    
+    private func saveSession() {
+        if let token = sessionToken {
+            userDefaults.set(token, forKey: keychain)
+        }
+        
+        if let user = currentUser {
+            let userData = try? encoder.encode(user)
+            userDefaults.set(userData, forKey: "par6_current_user")
+        }
+    }
+    
+    private func restoreSession() {
+        // Restore session token
+        if let savedToken = userDefaults.string(forKey: keychain) {
+            sessionToken = savedToken
+        }
+        
+        // Restore user data
+        if let userData = userDefaults.data(forKey: "par6_current_user") {
+            currentUser = try? decoder.decode(User.self, from: userData)
+        }
+        
+        // Validate session in background if we have both token and user
+        if sessionToken != nil && currentUser != nil {
+            Task {
+                await validateSession()
+            }
+        }
+    }
+    
+    private func clearSession() {
+        sessionToken = nil
+        currentUser = nil
+        userDefaults.removeObject(forKey: keychain)
+        userDefaults.removeObject(forKey: "par6_current_user")
+    }
+    
+    private func validateSession() async {
+        // Try to make a simple authenticated request to validate the session
+        do {
+            let _: [Score] = try await makeRequest(
+                endpoint: "/scores?start_date=2024-01-01&end_date=2024-01-01",
+                requiresAuth: true
+            )
+            // Session is valid, keep current state
+        } catch {
+            // Session is invalid, clear it
+            await MainActor.run {
+                clearSession()
+            }
+        }
     }
     
     private func makeRequest<T: Codable>(
@@ -88,8 +147,7 @@ class APIService: ObservableObject {
             }
             
             if httpResponse.statusCode == 401 {
-                sessionToken = nil
-                currentUser = nil
+                clearSession()
                 throw APIError.unauthorized
             }
             
@@ -130,6 +188,9 @@ class APIService: ObservableObject {
             handle: response.handle,
             createdAt: Date()
         )
+        
+        // Save session for persistence
+        saveSession()
         
         return response
     }
@@ -179,11 +240,55 @@ class APIService: ObservableObject {
         )
     }
     
+    // MARK: - Tournament Management
+    
+    func createTournament(name: String, startDate: String) async throws -> Tournament {
+        let body = try encoder.encode([
+            "name": name,
+            "start_date": startDate
+        ])
+        
+        return try await makeRequest(
+            endpoint: "/tournaments",
+            method: "POST",
+            body: body,
+            requiresAuth: true
+        )
+    }
+    
+    func getTournaments() async throws -> [TournamentSummary] {
+        return try await makeRequest(
+            endpoint: "/tournaments",
+            requiresAuth: true
+        )
+    }
+    
+    func joinTournament(tournamentId: String) async throws -> Tournament {
+        let body = try encoder.encode(["tournament_id": tournamentId])
+        
+        return try await makeRequest(
+            endpoint: "/tournaments/\(tournamentId)/join",
+            method: "POST",
+            body: body,
+            requiresAuth: true
+        )
+    }
+    
+    func getTournamentDetails(tournamentId: String) async throws -> TournamentSummary {
+        return try await makeRequest(
+            endpoint: "/tournaments/\(tournamentId)",
+            requiresAuth: true
+        )
+    }
+    
+    func shareTournament(tournamentId: String) -> String {
+        return "Join my Par6 Golf tournament! Tournament ID: \(tournamentId)\n\nDownload Par6 Golf to compete in our 18-day Wordle golf match!"
+    }
+    
     // MARK: - Utility
     
     func logout() {
-        sessionToken = nil
-        currentUser = nil
+        clearSession()
     }
     
     var isLoggedIn: Bool {

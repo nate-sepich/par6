@@ -54,6 +54,7 @@ Resources:
           USERS_TABLE: !Ref UsersTable
           SESSIONS_TABLE: !Ref SessionsTable
           SCORES_TABLE: !Ref ScoresTable
+          TOURNAMENTS_TABLE: !Ref TournamentsTable
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
@@ -61,6 +62,8 @@ Resources:
             TableName: !Ref SessionsTable
         - DynamoDBCrudPolicy:
             TableName: !Ref ScoresTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TournamentsTable
 
   # Users Table - Store user profiles
   UsersTable:
@@ -140,6 +143,38 @@ Resources:
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: !If [IsProd, true, false]
 
+  # Tournaments Table - Store tournament metadata and participants
+  TournamentsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'par6-tournaments-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: tournament_id
+          AttributeType: S
+        - AttributeName: created_by
+          AttributeType: S
+        - AttributeName: participant_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: tournament_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: CreatedByIndex
+          KeySchema:
+            - AttributeName: created_by
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: ParticipantIndex
+          KeySchema:
+            - AttributeName: participant_id
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: !If [IsProd, true, false]
+
 Conditions:
   IsProd: !Equals [!Ref Environment, 'prod']
 
@@ -173,3 +208,9 @@ Outputs:
     Value: !Ref ScoresTable
     Export:
       Name: !Sub '${AWS::StackName}-ScoresTable'
+  
+  TournamentsTableName:
+    Description: 'Tournaments Table Name'
+    Value: !Ref TournamentsTable
+    Export:
+      Name: !Sub '${AWS::StackName}-TournamentsTable'

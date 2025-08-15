@@ -3,7 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, List
-from models import UserCreate, UserResponse, ScoreCreate, Score, LeaderboardEntry
+from models import UserCreate, UserResponse, ScoreCreate, Score, LeaderboardEntry, TournamentCreate, Tournament, TournamentSummary
 import os
 
 # Use DynamoDB storage in Lambda, fallback to in-memory for local development
@@ -97,6 +97,44 @@ async def get_leaderboard(
     """Get leaderboard for date range"""
     leaderboard_data = storage.get_leaderboard(start_date, end_date, limit)
     return [LeaderboardEntry(**entry) for entry in leaderboard_data]
+
+# Tournament endpoints
+@app.post("/api/tournaments", response_model=Tournament)
+async def create_tournament(tournament_create: TournamentCreate, current_user = Depends(get_current_user)):
+    """Create a new tournament"""
+    try:
+        tournament = storage.create_tournament(
+            name=tournament_create.name,
+            start_date=tournament_create.start_date,
+            created_by=current_user.user_id
+        )
+        return tournament
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/api/tournaments", response_model=List[TournamentSummary])
+async def get_tournaments(current_user = Depends(get_current_user)):
+    """Get tournaments for the current user"""
+    tournaments = storage.get_tournaments(current_user.user_id)
+    return tournaments
+
+@app.post("/api/tournaments/{tournament_id}/join", response_model=Tournament)
+async def join_tournament(tournament_id: str, current_user = Depends(get_current_user)):
+    """Join a tournament"""
+    try:
+        tournament = storage.join_tournament(tournament_id, current_user.user_id)
+        return tournament
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/api/tournaments/{tournament_id}", response_model=TournamentSummary)
+async def get_tournament_details(tournament_id: str, current_user = Depends(get_current_user)):
+    """Get tournament details and standings"""
+    try:
+        tournament_summary = storage.get_tournament_details(tournament_id, current_user.user_id)
+        return tournament_summary
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 def lambda_handler(event, context):
     """Lambda handler for API Gateway events"""

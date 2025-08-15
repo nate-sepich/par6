@@ -45,6 +45,45 @@ class LeaderboardEntry(BaseModel):
     total_golf_score: int
     rounds_played: int
 
+# Tournament Models
+
+class TournamentCreate(BaseModel):
+    name: str = Field(..., min_length=3, max_length=100)
+    start_date: str  # YYYY-MM-DD format
+
+class Tournament(BaseModel):
+    tournament_id: str
+    name: str
+    start_date: str
+    end_date: str
+    created_by: str
+    participants: List[str]
+    created_at: datetime
+    is_active: bool
+
+class TournamentScore(BaseModel):
+    tournament_score_id: str
+    tournament_id: str
+    user_id: str
+    day: int  # 1-18
+    score: int
+    puzzle_date: str
+    created_at: datetime
+
+class TournamentStanding(BaseModel):
+    user_id: str
+    handle: str
+    total_score: int
+    completed_days: int
+    position: int
+    is_current_user: bool
+
+class TournamentSummary(BaseModel):
+    tournament_id: str
+    tournament: Tournament
+    standings: List[TournamentStanding]
+    user_participating: bool
+
 def calculate_golf_score(status: Status, guesses_used: Optional[int]) -> int:
     """Convert Wordle guesses to golf scores according to spec"""
     if status == Status.DNF:

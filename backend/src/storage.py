@@ -1,7 +1,7 @@
 from typing import Dict, List, Optional
 from datetime import datetime, date
 import uuid
-from models import User, Score, Status, calculate_golf_score
+from models import User, Score, Status, calculate_golf_score, Tournament, TournamentSummary, TournamentStanding
 
 class InMemoryStorage:
     def __init__(self):
@@ -10,6 +10,7 @@ class InMemoryStorage:
         self.sessions: Dict[str, str] = {}  # session_token -> user_id
         self.handle_to_user_id: Dict[str, str] = {}  # handle (lowercase) -> user_id
         self.user_date_scores: Dict[str, str] = {}  # f"{user_id}:{date}" -> score_id
+        self.tournaments: Dict[str, Tournament] = {}  # tournament_id -> Tournament
     
     def create_user(self, handle: str) -> tuple[User, str]:
         """Create a new user or login to existing user and return (user, session_token)"""
@@ -141,6 +142,119 @@ class InMemoryStorage:
         
         print(f"[TELEMETRY] leaderboard_fetched: {len(leaderboard)} users")
         return leaderboard[:limit]
+    
+    # Tournament methods
+    def create_tournament(self, name: str, start_date: str, created_by: str) -> Tournament:
+        """Create a new tournament"""
+        from datetime import datetime, timedelta
+        tournament_id = str(uuid.uuid4())
+        
+        # Calculate end date (18 days after start)
+        start = datetime.strptime(start_date, "%Y-%m-%d")
+        end_date = (start + timedelta(days=17)).strftime("%Y-%m-%d")  # 18 days total (0-17)
+        
+        tournament = Tournament(
+            tournament_id=tournament_id,
+            name=name,
+            start_date=start_date,
+            end_date=end_date,
+            created_by=created_by,
+            participants=[created_by],  # Creator is automatically a participant
+            created_at=datetime.utcnow(),
+            is_active=True
+        )
+        
+        self.tournaments[tournament_id] = tournament
+        print(f"[TELEMETRY] tournament_created: {name} by {created_by}")
+        return tournament
+    
+    def get_tournaments(self, user_id: str) -> List[TournamentSummary]:
+        """Get tournaments the user is participating in"""
+        summaries = []
+        for tournament in self.tournaments.values():
+            if user_id in tournament.participants:
+                standings = self._calculate_tournament_standings(tournament.tournament_id, user_id)
+                summary = TournamentSummary(
+                    tournament_id=tournament.tournament_id,
+                    tournament=tournament,
+                    standings=standings,
+                    user_participating=True
+                )
+                summaries.append(summary)
+        return summaries
+    
+    def join_tournament(self, tournament_id: str, user_id: str) -> Tournament:
+        """Join a tournament"""
+        if tournament_id not in self.tournaments:
+            raise ValueError("Tournament not found")
+        
+        tournament = self.tournaments[tournament_id]
+        if user_id not in tournament.participants:
+            tournament.participants.append(user_id)
+            self.tournaments[tournament_id] = tournament
+            print(f"[TELEMETRY] tournament_joined: {tournament_id} by {user_id}")
+        
+        return tournament
+    
+    def get_tournament_details(self, tournament_id: str, user_id: str) -> TournamentSummary:
+        """Get tournament details and standings"""
+        if tournament_id not in self.tournaments:
+            raise ValueError("Tournament not found")
+        
+        tournament = self.tournaments[tournament_id]
+        standings = self._calculate_tournament_standings(tournament_id, user_id)
+        user_participating = user_id in tournament.participants
+        
+        return TournamentSummary(
+            tournament_id=tournament_id,
+            tournament=tournament,
+            standings=standings,
+            user_participating=user_participating
+        )
+    
+    def _calculate_tournament_standings(self, tournament_id: str, current_user_id: str) -> List[TournamentStanding]:
+        """Calculate current tournament standings"""
+        tournament = self.tournaments[tournament_id]
+        user_stats = {}
+        
+        # Calculate stats for each participant
+        for user_id in tournament.participants:
+            user = self.users.get(user_id)
+            if not user:
+                continue
+                
+            total_score = 0
+            completed_days = 0
+            
+            # Get scores for the tournament date range
+            for score in self.scores.values():
+                if (score.user_id == user_id and 
+                    tournament.start_date <= score.puzzle_date <= tournament.end_date):
+                    total_score += score.golf_score
+                    completed_days += 1
+            
+            user_stats[user_id] = {
+                "handle": user.handle,
+                "total_score": total_score,
+                "completed_days": completed_days
+            }
+        
+        # Sort by total score (lower is better), then by completed days (higher is better)
+        sorted_users = sorted(user_stats.items(), key=lambda x: (x[1]["total_score"], -x[1]["completed_days"]))
+        
+        standings = []
+        for position, (user_id, stats) in enumerate(sorted_users, 1):
+            standing = TournamentStanding(
+                user_id=user_id,
+                handle=stats["handle"],
+                total_score=stats["total_score"],
+                completed_days=stats["completed_days"],
+                position=position,
+                is_current_user=(user_id == current_user_id)
+            )
+            standings.append(standing)
+        
+        return standings
 
 # Global storage instance
 storage = InMemoryStorage()

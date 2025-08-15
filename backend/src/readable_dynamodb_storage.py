@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import uuid
 from boto3.dynamodb.conditions import Key, Attr
 from botocore.exceptions import ClientError
-from models import User, Score, Status, calculate_golf_score
+from models import User, Score, Status, calculate_golf_score, Tournament, TournamentSummary, TournamentStanding
 
 class ReadableDynamoDBStorage:
     """
@@ -20,14 +20,16 @@ class ReadableDynamoDBStorage:
         self.users_table_name = os.environ.get('USERS_TABLE')
         self.sessions_table_name = os.environ.get('SESSIONS_TABLE')
         self.scores_table_name = os.environ.get('SCORES_TABLE')
+        self.tournaments_table_name = os.environ.get('TOURNAMENTS_TABLE')
         
-        if not all([self.users_table_name, self.sessions_table_name, self.scores_table_name]):
+        if not all([self.users_table_name, self.sessions_table_name, self.scores_table_name, self.tournaments_table_name]):
             raise ValueError("Missing table environment variables")
         
         # Initialize table references
         self.users_table = self.dynamodb.Table(self.users_table_name)
         self.sessions_table = self.dynamodb.Table(self.sessions_table_name)
         self.scores_table = self.dynamodb.Table(self.scores_table_name)
+        self.tournaments_table = self.dynamodb.Table(self.tournaments_table_name)
     
     def _generate_id(self) -> str:
         """Generate a unique ID"""
@@ -306,6 +308,256 @@ class ReadableDynamoDBStorage:
             
         except ClientError as e:
             print(f"[ERROR] get_leaderboard: {e}")
+            return []
+    
+    # Tournament methods - Full DynamoDB implementation
+    def create_tournament(self, name: str, start_date: str, created_by: str) -> Tournament:
+        """Create a new tournament"""
+        from datetime import datetime, timedelta
+        tournament_id = self._generate_id()
+        
+        # Calculate end date (18 days after start)
+        start = datetime.strptime(start_date, "%Y-%m-%d")
+        end_date = (start + timedelta(days=17)).strftime("%Y-%m-%d")
+        now = datetime.utcnow()
+        
+        tournament = Tournament(
+            tournament_id=tournament_id,
+            name=name,
+            start_date=start_date,
+            end_date=end_date,
+            created_by=created_by,
+            participants=[created_by],
+            created_at=now,
+            is_active=True
+        )
+        
+        try:
+            # Store tournament record with participants list
+            self.tournaments_table.put_item(Item={
+                'tournament_id': tournament_id,
+                'name': name,
+                'start_date': start_date,
+                'end_date': end_date,
+                'created_by': created_by,
+                'participants': [created_by],
+                'created_at': now.isoformat(),
+                'is_active': True
+            })
+            
+            # Also create participant record for easier querying
+            self.tournaments_table.put_item(Item={
+                'tournament_id': f"{tournament_id}#participant",
+                'participant_id': created_by,
+                'joined_at': now.isoformat()
+            })
+            
+            print(f"[TELEMETRY] tournament_created: {name} by {created_by}")
+            return tournament
+            
+        except ClientError as e:
+            raise ValueError(f"Error creating tournament: {e}")
+    
+    def get_tournaments(self, user_id: str) -> List[TournamentSummary]:
+        """Get tournaments the user is participating in"""
+        try:
+            summaries = []
+            
+            # Query for tournaments where user is a participant
+            response = self.tournaments_table.query(
+                IndexName='ParticipantIndex',
+                KeyConditionExpression=Key('participant_id').eq(user_id)
+            )
+            
+            # Get tournament details for each participation record
+            for item in response.get('Items', []):
+                tournament_id = item['tournament_id'].replace('#participant', '')
+                
+                # Get the main tournament record
+                tournament_response = self.tournaments_table.get_item(
+                    Key={'tournament_id': tournament_id}
+                )
+                
+                if 'Item' in tournament_response:
+                    tournament_item = tournament_response['Item']
+                    
+                    tournament = Tournament(
+                        tournament_id=tournament_item['tournament_id'],
+                        name=tournament_item['name'],
+                        start_date=tournament_item['start_date'],
+                        end_date=tournament_item['end_date'],
+                        created_by=tournament_item['created_by'],
+                        participants=tournament_item['participants'],
+                        created_at=datetime.fromisoformat(tournament_item['created_at']),
+                        is_active=tournament_item['is_active']
+                    )
+                    
+                    standings = self._calculate_tournament_standings(tournament_id, user_id)
+                    
+                    summary = TournamentSummary(
+                        tournament_id=tournament_id,
+                        tournament=tournament,
+                        standings=standings,
+                        user_participating=True
+                    )
+                    summaries.append(summary)
+            
+            return summaries
+            
+        except ClientError as e:
+            print(f"[ERROR] get_tournaments: {e}")
+            return []
+    
+    def join_tournament(self, tournament_id: str, user_id: str) -> Tournament:
+        """Join a tournament"""
+        try:
+            # Get tournament record
+            tournament_response = self.tournaments_table.get_item(
+                Key={'tournament_id': tournament_id}
+            )
+            
+            if 'Item' not in tournament_response:
+                raise ValueError("Tournament not found")
+            
+            tournament_item = tournament_response['Item']
+            participants = tournament_item.get('participants', [])
+            
+            # Add user to participants if not already there
+            if user_id not in participants:
+                participants.append(user_id)
+                
+                # Update tournament record
+                self.tournaments_table.update_item(
+                    Key={'tournament_id': tournament_id},
+                    UpdateExpression='SET participants = :participants',
+                    ExpressionAttributeValues={':participants': participants}
+                )
+                
+                # Create participant record
+                self.tournaments_table.put_item(Item={
+                    'tournament_id': f"{tournament_id}#participant",
+                    'participant_id': user_id,
+                    'joined_at': datetime.utcnow().isoformat()
+                })
+                
+                print(f"[TELEMETRY] tournament_joined: {tournament_id} by {user_id}")
+            
+            # Return updated tournament
+            return Tournament(
+                tournament_id=tournament_item['tournament_id'],
+                name=tournament_item['name'],
+                start_date=tournament_item['start_date'],
+                end_date=tournament_item['end_date'],
+                created_by=tournament_item['created_by'],
+                participants=participants,
+                created_at=datetime.fromisoformat(tournament_item['created_at']),
+                is_active=tournament_item['is_active']
+            )
+            
+        except ClientError as e:
+            raise ValueError(f"Error joining tournament: {e}")
+    
+    def get_tournament_details(self, tournament_id: str, user_id: str) -> TournamentSummary:
+        """Get tournament details and standings"""
+        try:
+            # Get tournament record
+            tournament_response = self.tournaments_table.get_item(
+                Key={'tournament_id': tournament_id}
+            )
+            
+            if 'Item' not in tournament_response:
+                raise ValueError("Tournament not found")
+            
+            tournament_item = tournament_response['Item']
+            
+            tournament = Tournament(
+                tournament_id=tournament_item['tournament_id'],
+                name=tournament_item['name'],
+                start_date=tournament_item['start_date'],
+                end_date=tournament_item['end_date'],
+                created_by=tournament_item['created_by'],
+                participants=tournament_item['participants'],
+                created_at=datetime.fromisoformat(tournament_item['created_at']),
+                is_active=tournament_item['is_active']
+            )
+            
+            standings = self._calculate_tournament_standings(tournament_id, user_id)
+            user_participating = user_id in tournament_item.get('participants', [])
+            
+            return TournamentSummary(
+                tournament_id=tournament_id,
+                tournament=tournament,
+                standings=standings,
+                user_participating=user_participating
+            )
+            
+        except ClientError as e:
+            raise ValueError(f"Error getting tournament details: {e}")
+    
+    def _calculate_tournament_standings(self, tournament_id: str, current_user_id: str) -> List[TournamentStanding]:
+        """Calculate current tournament standings"""
+        try:
+            # Get tournament details
+            tournament_response = self.tournaments_table.get_item(
+                Key={'tournament_id': tournament_id}
+            )
+            
+            if 'Item' not in tournament_response:
+                return []
+            
+            tournament_item = tournament_response['Item']
+            participants = tournament_item.get('participants', [])
+            start_date = tournament_item['start_date']
+            end_date = tournament_item['end_date']
+            
+            user_stats = {}
+            
+            # Calculate stats for each participant
+            for user_id in participants:
+                # Get user details
+                user_response = self.users_table.get_item(Key={'user_id': user_id})
+                if 'Item' not in user_response:
+                    continue
+                
+                user_item = user_response['Item']
+                total_score = 0
+                completed_days = 0
+                
+                # Get scores for the tournament date range
+                scores_response = self.scores_table.query(
+                    IndexName='UserDateIndex',
+                    KeyConditionExpression=Key('user_id').eq(user_id) & Key('puzzle_date').between(start_date, end_date)
+                )
+                
+                for score_item in scores_response.get('Items', []):
+                    total_score += score_item['golf_score']
+                    completed_days += 1
+                
+                user_stats[user_id] = {
+                    "handle": user_item['handle'],
+                    "total_score": total_score,
+                    "completed_days": completed_days
+                }
+            
+            # Sort by total score (lower is better), then by completed days (higher is better)
+            sorted_users = sorted(user_stats.items(), key=lambda x: (x[1]["total_score"], -x[1]["completed_days"]))
+            
+            standings = []
+            for position, (user_id, stats) in enumerate(sorted_users, 1):
+                standing = TournamentStanding(
+                    user_id=user_id,
+                    handle=stats["handle"],
+                    total_score=stats["total_score"],
+                    completed_days=stats["completed_days"],
+                    position=position,
+                    is_current_user=(user_id == current_user_id)
+                )
+                standings.append(standing)
+            
+            return standings
+            
+        except ClientError as e:
+            print(f"[ERROR] _calculate_tournament_standings: {e}")
             return []
 
 # Global storage instance

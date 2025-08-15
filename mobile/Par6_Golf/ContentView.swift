@@ -73,6 +73,14 @@ struct ContentView: View {
                 Text("Scorecard")
             }
 
+            NavigationStack {
+                TournamentView()
+            }
+            .tabItem {
+                Image(systemName: "flag.fill")
+                Text("Tournaments")
+            }
+
             ProfileView()
                 .tabItem {
                     Image(systemName: "person.crop.circle")
@@ -163,6 +171,10 @@ struct ScorecardView: View {
         let selectedDateString = formatter.string(from: selectedDate)
         
         return myScores.first { $0.puzzleDate == selectedDateString }
+    }
+    
+    private func hideKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
     
     private func submitScore() async {
@@ -349,6 +361,14 @@ struct ScorecardView: View {
                                             .stroke(shareText.isEmpty ? Color.gray.opacity(0.3) : Color.green.opacity(0.5), lineWidth: shareText.isEmpty ? 1 : 2)
                                     )
                                     .padding(.horizontal)
+                                    .toolbar {
+                                        ToolbarItemGroup(placement: .keyboard) {
+                                            Spacer()
+                                            Button("Done") {
+                                                hideKeyboard()
+                                            }
+                                        }
+                                    }
 
                                 Button(action: {
                                     Task {
@@ -397,6 +417,9 @@ struct ScorecardView: View {
                 }
             }
             .navigationBarHidden(true)
+            .onTapGesture {
+                hideKeyboard()
+            }
         }
         .onAppear {
             if apiService.isLoggedIn {
@@ -463,6 +486,627 @@ struct ScorecardView: View {
         }
     }
     
+}
+
+// MARK: - Tournament View
+
+struct TournamentView: View {
+    @StateObject private var apiService = APIService.shared
+    @State private var tournaments: [TournamentSummary] = []
+    @State private var selectedTournament: TournamentSummary?
+    @State private var showingCreateTournament = false
+    @State private var showingJoinTournament = false
+    @State private var isLoading = false
+    @State private var alertMessage = ""
+    @State private var showingAlert = false
+    
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 24) {
+                // Header
+                VStack(spacing: 8) {
+                    Text("Golf Tournaments")
+                        .font(.largeTitle)
+                        .bold()
+                        .foregroundColor(.green)
+                    Text("18-day Wordle competitions")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.top)
+                
+                if !apiService.isLoggedIn {
+                    VStack(spacing: 16) {
+                        Image(systemName: "flag.circle")
+                            .font(.system(size: 48))
+                            .foregroundColor(.green.opacity(0.6))
+                        Text("Login to join tournaments")
+                            .font(.headline)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.vertical, 40)
+                } else {
+                    // Action Buttons
+                    HStack(spacing: 16) {
+                        Button("Create Tournament") {
+                            showingCreateTournament = true
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.green)
+                        
+                        Button("Join Tournament") {
+                            showingJoinTournament = true
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.green)
+                    }
+                    .padding(.horizontal)
+                    
+                    // Tournaments List
+                    if tournaments.isEmpty && !isLoading {
+                        VStack(spacing: 16) {
+                            Image(systemName: "flag.2.crossed")
+                                .font(.system(size: 32))
+                                .foregroundColor(.green.opacity(0.6))
+                            Text("No tournaments yet")
+                                .font(.headline)
+                                .foregroundColor(.secondary)
+                            Text("Create your first tournament or join one with friends!")
+                                .multilineTextAlignment(.center)
+                                .foregroundColor(.secondary)
+                                .padding(.horizontal)
+                        }
+                        .padding(.vertical, 40)
+                    } else {
+                        LazyVStack(spacing: 16) {
+                            ForEach(tournaments) { tournament in
+                                TournamentCard(tournament: tournament) {
+                                    selectedTournament = tournament
+                                }
+                            }
+                        }
+                        .padding(.horizontal)
+                    }
+                }
+                
+                if isLoading {
+                    ProgressView()
+                        .padding()
+                }
+            }
+        }
+        .navigationBarHidden(true)
+        .onAppear {
+            if apiService.isLoggedIn {
+                Task {
+                    await loadTournaments()
+                }
+            }
+        }
+        .sheet(item: $selectedTournament) { tournament in
+            TournamentDetailView(tournament: tournament)
+        }
+        .sheet(isPresented: $showingCreateTournament) {
+            CreateTournamentView { 
+                Task { await loadTournaments() }
+            }
+        }
+        .sheet(isPresented: $showingJoinTournament) {
+            JoinTournamentView {
+                Task { await loadTournaments() }
+            }
+        }
+        .alert("Tournament", isPresented: $showingAlert) {
+            Button("OK") { }
+        } message: {
+            Text(alertMessage)
+        }
+    }
+    
+    private func loadTournaments() async {
+        isLoading = true
+        defer { isLoading = false }
+        
+        do {
+            tournaments = try await apiService.getTournaments()
+        } catch {
+            alertMessage = "Failed to load tournaments: \(error.localizedDescription)"
+            showingAlert = true
+        }
+    }
+}
+
+// MARK: - Tournament Card
+
+struct TournamentCard: View {
+    let tournament: TournamentSummary
+    let onTap: () -> Void
+    
+    var body: some View {
+        Button(action: onTap) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(tournament.tournament.name)
+                            .font(.headline)
+                            .foregroundColor(.primary)
+                        Text("18-Day Tournament")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    
+                    if tournament.userParticipating {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                    } else {
+                        Image(systemName: "plus.circle")
+                            .foregroundColor(.secondary)
+                    }
+                }
+                
+                // Mini leaderboard preview
+                if !tournament.standings.isEmpty {
+                    VStack(spacing: 4) {
+                        ForEach(tournament.standings.prefix(3)) { standing in
+                            HStack {
+                                Text("#\(standing.position)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .frame(width: 20, alignment: .leading)
+                                
+                                Text(standing.handle)
+                                    .font(.caption)
+                                    .foregroundColor(standing.isCurrentUser ? .green : .primary)
+                                
+                                Spacer()
+                                
+                                Text("\(standing.totalScore)")
+                                    .font(.caption)
+                                    .bold()
+                                    .foregroundColor(.green)
+                                
+                                Text("(\(standing.completedDays)/18)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                }
+                
+                HStack {
+                    Text("Starts: \(formatDate(tournament.tournament.startDate))")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text("\(tournament.standings.count) players")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding()
+            .background(Color(.systemGray6))
+            .cornerRadius(12)
+        }
+        .buttonStyle(.plain)
+    }
+    
+    private func formatDate(_ dateString: String) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        if let date = formatter.date(from: dateString) {
+            formatter.dateStyle = .medium
+            return formatter.string(from: date)
+        }
+        return dateString
+    }
+}
+
+// MARK: - Supporting Tournament Views
+
+struct TournamentDetailView: View {
+    let tournament: TournamentSummary
+    @StateObject private var apiService = APIService.shared
+    @State private var tournamentDetails: TournamentSummary?
+    @State private var isLoading = false
+    @State private var showingShare = false
+    
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 24) {
+                    // Tournament Header
+                    VStack(spacing: 12) {
+                        Text(tournament.tournament.name)
+                            .font(.largeTitle)
+                            .bold()
+                            .foregroundColor(.green)
+                        
+                        Text("18-Day Wordle Golf Tournament")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        
+                        HStack {
+                            VStack {
+                                Text("Start")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Text(formatDate(tournament.tournament.startDate))
+                                    .font(.subheadline)
+                                    .bold()
+                            }
+                            
+                            Text("—")
+                                .foregroundColor(.secondary)
+                            
+                            VStack {
+                                Text("End")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Text(formatDate(tournament.tournament.endDate))
+                                    .font(.subheadline)
+                                    .bold()
+                            }
+                        }
+                    }
+                    .padding()
+                    .background(Color(.systemGray6))
+                    .cornerRadius(12)
+                    .padding(.horizontal)
+                    
+                    // Leaderboard
+                    if !tournament.standings.isEmpty {
+                        VStack(alignment: .leading, spacing: 16) {
+                            Text("Leaderboard")
+                                .font(.headline)
+                                .padding(.horizontal)
+                            
+                            LazyVStack(spacing: 8) {
+                                ForEach(tournament.standings) { standing in
+                                    HStack {
+                                        Text("#\(standing.position)")
+                                            .font(.headline)
+                                            .foregroundColor(.secondary)
+                                            .frame(width: 30, alignment: .leading)
+                                        
+                                        Text(standing.handle)
+                                            .font(.headline)
+                                            .foregroundColor(standing.isCurrentUser ? .green : .primary)
+                                        
+                                        Spacer()
+                                        
+                                        VStack(alignment: .trailing) {
+                                            Text("\(standing.totalScore)")
+                                                .font(.headline)
+                                                .bold()
+                                                .foregroundColor(.green)
+                                            Text("\(standing.completedDays)/18")
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
+                                    }
+                                    .padding()
+                                    .background(standing.isCurrentUser ? Color.green.opacity(0.1) : Color(.systemGray6))
+                                    .cornerRadius(8)
+                                }
+                            }
+                            .padding(.horizontal)
+                        }
+                    }
+                    
+                    // Share Button
+                    Button("Share Tournament") {
+                        showingShare = true
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.green)
+                    .padding(.horizontal)
+                    
+                    Spacer(minLength: 20)
+                }
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .onAppear {
+                Task {
+                    await loadTournamentDetails()
+                }
+            }
+        }
+        .sheet(isPresented: $showingShare) {
+            ShareTournamentView(tournament: tournament.tournament)
+        }
+    }
+    
+    private func loadTournamentDetails() async {
+        isLoading = true
+        defer { isLoading = false }
+        
+        do {
+            tournamentDetails = try await apiService.getTournamentDetails(tournamentId: tournament.tournament.id)
+        } catch {
+            print("Failed to load tournament details: \(error)")
+        }
+    }
+    
+    private func formatDate(_ dateString: String) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        if let date = formatter.date(from: dateString) {
+            formatter.dateStyle = .medium
+            return formatter.string(from: date)
+        }
+        return dateString
+    }
+}
+
+struct ShareTournamentView: View {
+    let tournament: Tournament
+    @Environment(\.dismiss) private var dismiss
+    
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 24) {
+                VStack(spacing: 16) {
+                    Text("Share Tournament")
+                        .font(.largeTitle)
+                        .bold()
+                        .foregroundColor(.green)
+                    
+                    Text("Share this tournament ID with friends so they can join your competition!")
+                        .multilineTextAlignment(.center)
+                        .foregroundColor(.secondary)
+                }
+                
+                VStack(spacing: 16) {
+                    Text("Tournament ID")
+                        .font(.headline)
+                    
+                    Text(tournament.id)
+                        .font(.title2)
+                        .bold()
+                        .padding()
+                        .background(Color(.systemGray6))
+                        .cornerRadius(8)
+                        .textSelection(.enabled)
+                }
+                
+                Button("Copy Tournament ID") {
+                    UIPasteboard.general.string = tournament.id
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+                
+                Spacer()
+            }
+            .padding()
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
+struct CreateTournamentView: View {
+    let onComplete: () -> Void
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var apiService = APIService.shared
+    @State private var tournamentName = ""
+    @State private var startDate = Date()
+    @State private var isLoading = false
+    @State private var alertMessage = ""
+    @State private var showingAlert = false
+    @State private var createdTournament: Tournament?
+    @State private var showingShare = false
+    
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 24) {
+                VStack(spacing: 16) {
+                    Text("Create Tournament")
+                        .font(.largeTitle)
+                        .bold()
+                        .foregroundColor(.green)
+                    
+                    Text("Create an 18-day Wordle golf tournament to compete with friends!")
+                        .multilineTextAlignment(.center)
+                        .foregroundColor(.secondary)
+                }
+                
+                VStack(spacing: 16) {
+                    TextField("Tournament Name", text: $tournamentName)
+                        .textFieldStyle(.roundedBorder)
+                        .autocapitalization(.words)
+                    
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Start Date")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        
+                        DatePicker("", selection: $startDate, in: Date()..., displayedComponents: .date)
+                            .datePickerStyle(.compact)
+                    }
+                }
+                .padding(.horizontal)
+                
+                Button(action: {
+                    Task {
+                        await createTournament()
+                    }
+                }) {
+                    HStack {
+                        if isLoading {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                                .foregroundColor(.white)
+                        } else {
+                            Image(systemName: "flag.fill")
+                        }
+                        Text("Create Tournament")
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(tournamentName.trimmingCharacters(in: .whitespaces).isEmpty || isLoading ? Color.gray : Color.green)
+                    .foregroundColor(.white)
+                    .cornerRadius(12)
+                }
+                .disabled(tournamentName.trimmingCharacters(in: .whitespaces).isEmpty || isLoading)
+                .padding(.horizontal)
+                
+                Spacer()
+            }
+            .padding()
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+        .sheet(isPresented: $showingShare) {
+            if let tournament = createdTournament {
+                ShareTournamentView(tournament: tournament)
+            }
+        }
+        .alert("Tournament", isPresented: $showingAlert) {
+            Button("OK") {
+                if createdTournament != nil {
+                    showingShare = true
+                }
+            }
+        } message: {
+            Text(alertMessage)
+        }
+    }
+    
+    private func createTournament() async {
+        isLoading = true
+        defer { isLoading = false }
+        
+        do {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyy-MM-dd"
+            let startDateString = formatter.string(from: startDate)
+            
+            let tournament = try await apiService.createTournament(
+                name: tournamentName.trimmingCharacters(in: .whitespaces),
+                startDate: startDateString
+            )
+            
+            createdTournament = tournament
+            alertMessage = "Tournament '\(tournament.name)' created successfully! Share the tournament ID with friends."
+            showingAlert = true
+            onComplete()
+            
+        } catch {
+            alertMessage = "Failed to create tournament: \(error.localizedDescription)"
+            showingAlert = true
+        }
+    }
+}
+
+struct JoinTournamentView: View {
+    let onComplete: () -> Void
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var apiService = APIService.shared
+    @State private var tournamentId = ""
+    @State private var isLoading = false
+    @State private var alertMessage = ""
+    @State private var showingAlert = false
+    
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 24) {
+                VStack(spacing: 16) {
+                    Text("Join Tournament")
+                        .font(.largeTitle)
+                        .bold()
+                        .foregroundColor(.green)
+                    
+                    Text("Enter the tournament ID shared by your friend to join their 18-day Wordle golf competition!")
+                        .multilineTextAlignment(.center)
+                        .foregroundColor(.secondary)
+                }
+                
+                VStack(spacing: 16) {
+                    TextField("Tournament ID", text: $tournamentId)
+                        .textFieldStyle(.roundedBorder)
+                        .autocapitalization(.none)
+                        .disableAutocorrection(true)
+                        .padding(.horizontal)
+                    
+                    Text("The tournament ID is a unique code your friend got when creating the tournament.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                }
+                
+                Button(action: {
+                    Task {
+                        await joinTournament()
+                    }
+                }) {
+                    HStack {
+                        if isLoading {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                                .foregroundColor(.white)
+                        } else {
+                            Image(systemName: "plus.circle.fill")
+                        }
+                        Text("Join Tournament")
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(tournamentId.trimmingCharacters(in: .whitespaces).isEmpty || isLoading ? Color.gray : Color.green)
+                    .foregroundColor(.white)
+                    .cornerRadius(12)
+                }
+                .disabled(tournamentId.trimmingCharacters(in: .whitespaces).isEmpty || isLoading)
+                .padding(.horizontal)
+                
+                Spacer()
+            }
+            .padding()
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+        .alert("Tournament", isPresented: $showingAlert) {
+            Button("OK") {
+                if alertMessage.contains("successfully") {
+                    dismiss()
+                    onComplete()
+                }
+            }
+        } message: {
+            Text(alertMessage)
+        }
+    }
+    
+    private func joinTournament() async {
+        isLoading = true
+        defer { isLoading = false }
+        
+        do {
+            let tournament = try await apiService.joinTournament(
+                tournamentId: tournamentId.trimmingCharacters(in: .whitespaces)
+            )
+            
+            alertMessage = "Successfully joined '\(tournament.name)'! Start playing Wordle and submit your scores to compete."
+            showingAlert = true
+            
+        } catch {
+            alertMessage = "Failed to join tournament: \(error.localizedDescription)"
+            showingAlert = true
+        }
+    }
 }
 
 func parseNYTShareString(_ shareString: String) -> (score: Int, date: Date)? {

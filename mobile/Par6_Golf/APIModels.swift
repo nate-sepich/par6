@@ -95,3 +95,81 @@ struct LeaderboardEntry: Codable, Identifiable {
         case roundsPlayed = "rounds_played"
     }
 }
+
+// MARK: - Tournament Models
+
+struct Tournament: Codable, Identifiable {
+    let id: String
+    let name: String
+    let startDate: String // yyyy-MM-dd format
+    let endDate: String   // 18 days after start
+    let createdBy: String
+    let participants: [String] // Array of user IDs
+    let createdAt: Date
+    let isActive: Bool
+    
+    enum CodingKeys: String, CodingKey {
+        case id = "tournament_id"
+        case name
+        case startDate = "start_date"
+        case endDate = "end_date"
+        case createdBy = "created_by"
+        case participants
+        case createdAt = "created_at"
+        case isActive = "is_active"
+    }
+}
+
+struct TournamentScore: Codable, Identifiable {
+    let id: String
+    let tournamentId: String
+    let userId: String
+    let day: Int // 1-18 (hole number)
+    let score: Int // Golf score for that day
+    let puzzleDate: String
+    let createdAt: Date
+    
+    enum CodingKeys: String, CodingKey {
+        case id = "tournament_score_id"
+        case tournamentId = "tournament_id"
+        case userId = "user_id"
+        case day
+        case score
+        case puzzleDate = "puzzle_date"
+        case createdAt = "created_at"
+    }
+}
+
+struct TournamentStanding: Codable, Identifiable {
+    let userId: String
+    let handle: String
+    let totalScore: Int
+    let completedDays: Int
+    let position: Int
+    let isCurrentUser: Bool
+    
+    enum CodingKeys: String, CodingKey {
+        case userId = "user_id"
+        case handle
+        case totalScore = "total_score"
+        case completedDays = "completed_days"
+        case position
+        case isCurrentUser = "is_current_user"
+    }
+    
+    var id: String { userId }
+}
+
+struct TournamentSummary: Codable, Identifiable {
+    let id: String
+    let tournament: Tournament
+    let standings: [TournamentStanding]
+    let userParticipating: Bool
+    
+    enum CodingKeys: String, CodingKey {
+        case id = "tournament_id"
+        case tournament
+        case standings
+        case userParticipating = "user_participating"
+    }
+}
