@@ -145,6 +145,26 @@ struct ScorecardView: View {
         return puzzleDate
     }
     
+    private func formatSelectedDate() -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        return formatter.string(from: selectedDate)
+    }
+    
+    private func formatSelectedDateShort() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "M/d"
+        return formatter.string(from: selectedDate)
+    }
+    
+    private func getScoreForSelectedDate() -> Score? {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        let selectedDateString = formatter.string(from: selectedDate)
+        
+        return myScores.first { $0.puzzleDate == selectedDateString }
+    }
+    
     private func submitScore() async {
         guard let (score, _) = parseNYTShareString(shareText) else {
             alertMessage = "Could not parse the Wordle share string. Please check your input."
@@ -173,8 +193,9 @@ struct ScorecardView: View {
                 sourceText: shareText
             )
             
+            let wasUpdate = getScoreForSelectedDate() != nil
             shareText = ""
-            alertMessage = "Score added for \(shortDate(selectedDate))!"
+            alertMessage = wasUpdate ? "Score updated for \(shortDate(selectedDate))!" : "Score added for \(shortDate(selectedDate))!"
             showingAlert = true
             
             // Reload scores to show the new one
@@ -265,19 +286,58 @@ struct ScorecardView: View {
                     
                     // Input Section (only show when logged in)
                     if apiService.isLoggedIn {
-                        VStack(spacing: 20) {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Select Date")
-                                    .font(.headline)
-                                    .padding(.horizontal)
+                        VStack(spacing: 24) {
+                            // Date Selection Card
+                            VStack(spacing: 16) {
+                                HStack {
+                                    Text("Add Score for Date")
+                                        .font(.headline)
+                                    Spacer()
+                                }
+                                .padding(.horizontal)
                                 
-                                DatePicker("", selection: $selectedDate, displayedComponents: .date)
-                                    .datePickerStyle(.compact)
-                                    .padding(.horizontal)
+                                VStack(spacing: 12) {
+                                    HStack {
+                                        Text("Selected Date:")
+                                            .font(.subheadline)
+                                            .foregroundColor(.secondary)
+                                        Spacer()
+                                        Text(formatSelectedDate())
+                                            .font(.subheadline)
+                                            .bold()
+                                            .foregroundColor(.green)
+                                    }
+                                    
+                                    // Show existing score if any
+                                    if let existingScore = getScoreForSelectedDate() {
+                                        HStack {
+                                            Text("Current Score:")
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                            Spacer()
+                                            Text(scoreString(existingScore.golfScore))
+                                                .font(.caption)
+                                                .bold()
+                                                .foregroundColor(.orange)
+                                            Text("(will be updated)")
+                                                .font(.caption)
+                                                .foregroundColor(.orange)
+                                        }
+                                    }
+                                    
+                                    DatePicker("Select Date", selection: $selectedDate, in: ...Date(), displayedComponents: .date)
+                                        .datePickerStyle(.graphical)
+                                        .accentColor(.green)
+                                }
+                                .padding()
+                                .background(Color.green.opacity(0.05))
+                                .cornerRadius(12)
+                                .padding(.horizontal)
                             }
                             
+                            // Score Input Section
                             VStack(spacing: 16) {
-                                Text("Paste your Wordle share string:")
+                                Text("Paste your Wordle share string for \(formatSelectedDate()):")
                                     .font(.subheadline)
                                     .multilineTextAlignment(.center)
                                     .padding(.horizontal)
@@ -286,7 +346,7 @@ struct ScorecardView: View {
                                     .frame(height: 120)
                                     .overlay(
                                         RoundedRectangle(cornerRadius: 12)
-                                            .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+                                            .stroke(shareText.isEmpty ? Color.gray.opacity(0.3) : Color.green.opacity(0.5), lineWidth: shareText.isEmpty ? 1 : 2)
                                     )
                                     .padding(.horizontal)
 
@@ -303,7 +363,7 @@ struct ScorecardView: View {
                                         } else {
                                             Image(systemName: "plus.circle.fill")
                                         }
-                                        Text("Add Score")
+                                        Text(getScoreForSelectedDate() != nil ? "Update Score for \(formatSelectedDateShort())" : "Add Score for \(formatSelectedDateShort())")
                                     }
                                     .frame(maxWidth: .infinity)
                                     .padding()
