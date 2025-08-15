@@ -12,12 +12,20 @@ class InMemoryStorage:
         self.user_date_scores: Dict[str, str] = {}  # f"{user_id}:{date}" -> score_id
     
     def create_user(self, handle: str) -> tuple[User, str]:
-        """Create a new user and return (user, session_token)"""
+        """Create a new user or login to existing user and return (user, session_token)"""
         handle_lower = handle.lower()
         
         if handle_lower in self.handle_to_user_id:
-            raise ValueError("Handle already exists")
+            # User exists, create new session for existing user
+            user_id = self.handle_to_user_id[handle_lower]
+            user = self.users[user_id]
+            session_token = str(uuid.uuid4())
+            self.sessions[session_token] = user_id
+            
+            print(f"[TELEMETRY] user_logged_in: {handle}")
+            return user, session_token
         
+        # User doesn't exist, create new user
         user_id = str(uuid.uuid4())
         session_token = str(uuid.uuid4())
         

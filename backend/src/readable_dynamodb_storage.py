@@ -36,7 +36,7 @@ class ReadableDynamoDBStorage:
     # MARK: - User Management
     
     def create_user(self, handle: str) -> tuple[User, str]:
-        """Create a new user and return (user, session_token)"""
+        """Create a new user or login to existing user and return (user, session_token)"""
         handle_lower = handle.lower()
         
         # Check if handle already exists
@@ -47,10 +47,35 @@ class ReadableDynamoDBStorage:
             )
             
             if response['Items']:
-                raise ValueError("Handle already exists")
+                # User exists, create new session for existing user
+                existing_user_item = response['Items'][0]
+                user_id = existing_user_item['user_id']
+                
+                user = User(
+                    user_id=user_id,
+                    handle=existing_user_item['handle'],
+                    created_at=datetime.fromisoformat(existing_user_item['created_at'])
+                )
+                
+                # Create new session
+                session_token = self._generate_id()
+                now = datetime.utcnow()
+                expires_at = now + timedelta(days=30)
+                
+                self.sessions_table.put_item(Item={
+                    'session_token': session_token,
+                    'user_id': user_id,
+                    'created_at': now.isoformat(),
+                    'expires_at': int(expires_at.timestamp())
+                })
+                
+                print(f"[TELEMETRY] user_logged_in: {handle}")
+                return user, session_token
+                
         except ClientError as e:
             raise ValueError(f"Error checking handle: {e}")
         
+        # User doesn't exist, create new user
         user_id = self._generate_id()
         session_token = self._generate_id()
         now = datetime.utcnow()
