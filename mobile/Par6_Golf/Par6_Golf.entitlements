@@ -2,6 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- iOS app: no macOS sandbox entitlements. Add only iOS capabilities you actually enable (e.g., push, keychain, groups). -->
+	<key>com.apple.developer.game-center</key>
+	<true/>
 </dict>
 </plist>
