@@ -37,17 +37,6 @@ Par6 Golf converts Wordle guesses into golf scores and provides leaderboards and
 - Leaderboard calculation
 - **Recent Fix**: Tournament visibility bug resolved (participant records properly indexed)
 
-### Mobile App (🚧 App Store Review)
-- Core functionality complete
-- Screenshots generated for App Store submission
-- Game Center entitlement configured
-
-### App Store Submission Requirements
-- ✅ Screenshots (iPhone & iPad dimensions)
-- ✅ Game Center entitlement (`com.apple.developer.game-center`)
-- ❌ Copyright information (pending in App Store Connect)
-- ❌ Privacy Policy URL (required)
-
 ## Project Structure
 
 ```
@@ -81,8 +70,3 @@ sam deploy
 
 ### Mobile Development
 Open `mobile/Par6_Golf.xcodeproj` in Xcode.
-
-## Recent Updates
-- **Tournament Bug Fix**: Fixed issue where tournament creators couldn't see tournaments after other users joined
-- **App Store Prep**: Generated required screenshot dimensions and configured entitlements
-- **Infrastructure**: Deployed to AWS with DynamoDB backend
