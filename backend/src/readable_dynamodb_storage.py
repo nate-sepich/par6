@@ -311,14 +311,14 @@ class ReadableDynamoDBStorage:
             return []
     
     # Tournament methods - Full DynamoDB implementation
-    def create_tournament(self, name: str, start_date: str, created_by: str) -> Tournament:
+    def create_tournament(self, name: str, start_date: str, duration_days: int, created_by: str) -> Tournament:
         """Create a new tournament"""
         from datetime import datetime, timedelta
         tournament_id = self._generate_id()
         
-        # Calculate end date (18 days after start)
+        # Calculate end date based on duration (9 or 18 days)
         start = datetime.strptime(start_date, "%Y-%m-%d")
-        end_date = (start + timedelta(days=17)).strftime("%Y-%m-%d")
+        end_date = (start + timedelta(days=duration_days - 1)).strftime("%Y-%m-%d")
         now = datetime.utcnow()
         
         tournament = Tournament(
@@ -326,6 +326,7 @@ class ReadableDynamoDBStorage:
             name=name,
             start_date=start_date,
             end_date=end_date,
+            duration_days=duration_days,
             created_by=created_by,
             participants=[created_by],
             created_at=now,
@@ -339,6 +340,7 @@ class ReadableDynamoDBStorage:
                 'name': name,
                 'start_date': start_date,
                 'end_date': end_date,
+                'duration_days': duration_days,
                 'created_by': created_by,
                 'participants': [created_by],
                 'created_at': now.isoformat(),
@@ -347,7 +349,7 @@ class ReadableDynamoDBStorage:
             
             # Also create participant record for easier querying
             self.tournaments_table.put_item(Item={
-                'tournament_id': f"{tournament_id}#participant",
+                'tournament_id': f"{tournament_id}#participant#{created_by}",
                 'participant_id': created_by,
                 'joined_at': now.isoformat()
             })
@@ -371,7 +373,13 @@ class ReadableDynamoDBStorage:
             
             # Get tournament details for each participation record
             for item in response.get('Items', []):
-                tournament_id = item['tournament_id'].replace('#participant', '')
+                # Extract tournament ID from participant record (format: {tournament_id}#participant#{user_id})
+                full_tournament_id = item['tournament_id']
+                if '#participant#' in full_tournament_id:
+                    tournament_id = full_tournament_id.split('#participant#')[0]
+                else:
+                    # Handle legacy format for backwards compatibility
+                    tournament_id = full_tournament_id.replace('#participant', '')
                 
                 # Get the main tournament record
                 tournament_response = self.tournaments_table.get_item(
@@ -386,6 +394,7 @@ class ReadableDynamoDBStorage:
                         name=tournament_item['name'],
                         start_date=tournament_item['start_date'],
                         end_date=tournament_item['end_date'],
+                        duration_days=tournament_item.get('duration_days', 18),  # Default to 18 for existing tournaments
                         created_by=tournament_item['created_by'],
                         participants=tournament_item['participants'],
                         created_at=datetime.fromisoformat(tournament_item['created_at']),
@@ -435,7 +444,7 @@ class ReadableDynamoDBStorage:
                 
                 # Create participant record
                 self.tournaments_table.put_item(Item={
-                    'tournament_id': f"{tournament_id}#participant",
+                    'tournament_id': f"{tournament_id}#participant#{user_id}",
                     'participant_id': user_id,
                     'joined_at': datetime.utcnow().isoformat()
                 })
@@ -448,6 +457,7 @@ class ReadableDynamoDBStorage:
                 name=tournament_item['name'],
                 start_date=tournament_item['start_date'],
                 end_date=tournament_item['end_date'],
+                duration_days=tournament_item.get('duration_days', 18),  # Default to 18 for backwards compatibility
                 created_by=tournament_item['created_by'],
                 participants=participants,
                 created_at=datetime.fromisoformat(tournament_item['created_at']),
@@ -475,6 +485,7 @@ class ReadableDynamoDBStorage:
                 name=tournament_item['name'],
                 start_date=tournament_item['start_date'],
                 end_date=tournament_item['end_date'],
+                duration_days=tournament_item.get('duration_days', 18),  # Default to 18 for backwards compatibility
                 created_by=tournament_item['created_by'],
                 participants=tournament_item['participants'],
                 created_at=datetime.fromisoformat(tournament_item['created_at']),

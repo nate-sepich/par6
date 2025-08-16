@@ -104,6 +104,9 @@ struct ScorecardView: View {
     @State private var isLoading = false
     @State private var showUserSetup = false
     @State private var userHandle = ""
+    @State private var showCalendar = false
+    @State private var dateJustSelected = false
+    @State private var loadTask: Task<Void, Never>?
     
     private func shortDate(_ date: Date) -> String {
         let formatter = DateFormatter()
@@ -111,13 +114,16 @@ struct ScorecardView: View {
         return formatter.string(from: date)
     }
     
-    private func scoreString(_ score: Int) -> String {
-        if score == 1 {
-            return "⛳"
-        } else if score <= 6 {
-            return "\(score)"
-        } else {
-            return "X"
+    private func scoreString(_ golfScore: Int) -> String {
+        switch golfScore {
+        case -3: return "⛳"    // Ace (1/6)
+        case -2: return "-2"   // Eagle (2/6) 
+        case -1: return "-1"   // Birdie (3/6)
+        case 0: return "E"     // Par (4/6)
+        case 1: return "+1"    // Bogey (5/6)
+        case 2: return "+2"    // Double Bogey (6/6)
+        case 4: return "+4"    // Penalty/DNF (X/6)
+        default: return "+\(golfScore)"
         }
     }
     
@@ -128,6 +134,9 @@ struct ScorecardView: View {
         defer { isLoading = false }
         
         do {
+            // Check for cancellation
+            try Task.checkCancellation()
+            
             let formatter = DateFormatter()
             formatter.dateFormat = "yyyy-MM-dd"
             
@@ -138,6 +147,8 @@ struct ScorecardView: View {
                 startDate: formatter.string(from: startDate),
                 endDate: formatter.string(from: endDate)
             )
+        } catch is CancellationError {
+            print("[DEBUG] Load scores was cancelled")
         } catch {
             alertMessage = "Failed to load scores: \(error.localizedDescription)"
             showingAlert = true
@@ -198,10 +209,22 @@ struct ScorecardView: View {
             formatter.dateFormat = "yyyy-MM-dd"
             let puzzleDateString = formatter.string(from: selectedDate)
             
+            // Handle failed attempts (score 7) vs successful solves (1-6)
+            let status: Status
+            let guessesUsed: Int?
+            
+            if score == 7 {
+                status = .dnf
+                guessesUsed = nil
+            } else {
+                status = .solved
+                guessesUsed = score
+            }
+            
             let _ = try await apiService.submitScore(
                 puzzleDate: puzzleDateString,
-                status: .solved,
-                guessesUsed: score,
+                status: status,
+                guessesUsed: guessesUsed,
                 sourceText: shareText
             )
             
@@ -309,16 +332,27 @@ struct ScorecardView: View {
                                 .padding(.horizontal)
                                 
                                 VStack(spacing: 12) {
-                                    HStack {
-                                        Text("Selected Date:")
-                                            .font(.subheadline)
-                                            .foregroundColor(.secondary)
-                                        Spacer()
-                                        Text(formatSelectedDate())
-                                            .font(.subheadline)
-                                            .bold()
-                                            .foregroundColor(.green)
+                                    // Tappable date selector
+                                    Button(action: {
+                                        withAnimation(.easeInOut(duration: 0.3)) {
+                                            showCalendar.toggle()
+                                        }
+                                    }) {
+                                        HStack {
+                                            Text("Selected Date:")
+                                                .font(.subheadline)
+                                                .foregroundColor(.secondary)
+                                            Spacer()
+                                            Text(formatSelectedDate())
+                                                .font(.subheadline)
+                                                .bold()
+                                                .foregroundColor(.green)
+                                            Image(systemName: showCalendar ? "chevron.up" : "chevron.down")
+                                                .foregroundColor(.green)
+                                                .font(.caption)
+                                        }
                                     }
+                                    .buttonStyle(.plain)
                                     
                                     // Show existing score if any
                                     if let existingScore = getScoreForSelectedDate() {
@@ -337,9 +371,31 @@ struct ScorecardView: View {
                                         }
                                     }
                                     
-                                    DatePicker("Select Date", selection: $selectedDate, in: ...Date(), displayedComponents: .date)
-                                        .datePickerStyle(.graphical)
-                                        .accentColor(.green)
+                                    // Collapsible calendar
+                                    if showCalendar {
+                                        VStack {
+                                            DatePicker("Select Date", selection: $selectedDate, in: ...Date(), displayedComponents: .date)
+                                                .datePickerStyle(.graphical)
+                                                .accentColor(.green)
+                                                .onChange(of: selectedDate) { oldValue, newValue in
+                                                    print("[DEBUG] Date changed from \(oldValue) to \(newValue)")
+                                                    // Auto-collapse calendar and guide user to input
+                                                    withAnimation(.easeInOut(duration: 0.3)) {
+                                                        showCalendar = false
+                                                        dateJustSelected = true
+                                                    }
+                                                    
+                                                    // Reset the highlight after a few seconds
+                                                    DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                                                        withAnimation(.easeOut(duration: 0.5)) {
+                                                            dateJustSelected = false
+                                                        }
+                                                    }
+                                                }
+                                        }
+                                        .transition(.opacity.combined(with: .scale))
+                                        .allowsHitTesting(true)
+                                    }
                                 }
                                 .padding()
                                 .background(Color.green.opacity(0.05))
@@ -349,17 +405,55 @@ struct ScorecardView: View {
                             
                             // Score Input Section
                             VStack(spacing: 16) {
-                                Text("Paste your Wordle share string for \(formatSelectedDate()):")
-                                    .font(.subheadline)
-                                    .multilineTextAlignment(.center)
-                                    .padding(.horizontal)
+                                VStack(spacing: 8) {
+                                    if dateJustSelected {
+                                        Text("Perfect! Now paste your Wordle score:")
+                                            .font(.subheadline)
+                                            .fontWeight(.semibold)
+                                            .foregroundColor(.green)
+                                            .multilineTextAlignment(.center)
+                                            .transition(.opacity.combined(with: .scale))
+                                        
+                                        Text("For \(formatSelectedDate())")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                            .transition(.opacity)
+                                    } else {
+                                        Text("Paste your Wordle share string for \(formatSelectedDate()):")
+                                            .font(.subheadline)
+                                            .multilineTextAlignment(.center)
+                                            .transition(.opacity)
+                                    }
+                                }
+                                .padding(.horizontal)
+                                .onTapGesture {
+                                    hideKeyboard()
+                                }
 
                                 TextEditor(text: $shareText)
                                     .frame(height: 120)
                                     .overlay(
                                         RoundedRectangle(cornerRadius: 12)
-                                            .stroke(shareText.isEmpty ? Color.gray.opacity(0.3) : Color.green.opacity(0.5), lineWidth: shareText.isEmpty ? 1 : 2)
+                                            .stroke(
+                                                dateJustSelected ? Color.green.opacity(0.8) :
+                                                shareText.isEmpty ? Color.gray.opacity(0.3) : Color.green.opacity(0.5), 
+                                                lineWidth: dateJustSelected ? 3 : (shareText.isEmpty ? 1 : 2)
+                                            )
+                                            .animation(.easeInOut(duration: 0.3), value: dateJustSelected)
                                     )
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 12)
+                                            .fill(dateJustSelected ? Color.green.opacity(0.05) : Color.clear)
+                                            .animation(.easeInOut(duration: 0.3), value: dateJustSelected)
+                                    )
+                                    .onChange(of: shareText) { oldValue, newValue in
+                                        // Clear highlight when user starts typing
+                                        if !newValue.isEmpty && dateJustSelected {
+                                            withAnimation(.easeOut(duration: 0.3)) {
+                                                dateJustSelected = false
+                                            }
+                                        }
+                                    }
                                     .padding(.horizontal)
                                     .toolbar {
                                         ToolbarItemGroup(placement: .keyboard) {
@@ -417,13 +511,20 @@ struct ScorecardView: View {
                 }
             }
             .navigationBarHidden(true)
-            .onTapGesture {
-                hideKeyboard()
+        }
+        .refreshable {
+            if apiService.isLoggedIn {
+                loadTask?.cancel()
+                loadTask = Task {
+                    await loadScores()
+                }
+                await loadTask?.value
             }
         }
         .onAppear {
             if apiService.isLoggedIn {
-                Task {
+                loadTask?.cancel()
+                loadTask = Task {
                     await loadScores()
                 }
             }
@@ -499,6 +600,7 @@ struct TournamentView: View {
     @State private var isLoading = false
     @State private var alertMessage = ""
     @State private var showingAlert = false
+    @State private var loadTask: Task<Void, Never>?
     
     var body: some View {
         ScrollView {
@@ -576,9 +678,19 @@ struct TournamentView: View {
             }
         }
         .navigationBarHidden(true)
+        .refreshable {
+            if apiService.isLoggedIn {
+                loadTask?.cancel()
+                loadTask = Task {
+                    await loadTournaments()
+                }
+                await loadTask?.value
+            }
+        }
         .onAppear {
             if apiService.isLoggedIn {
-                Task {
+                loadTask?.cancel()
+                loadTask = Task {
                     await loadTournaments()
                 }
             }
@@ -588,12 +700,14 @@ struct TournamentView: View {
         }
         .sheet(isPresented: $showingCreateTournament) {
             CreateTournamentView { 
-                Task { await loadTournaments() }
+                loadTask?.cancel()
+                loadTask = Task { await loadTournaments() }
             }
         }
         .sheet(isPresented: $showingJoinTournament) {
             JoinTournamentView {
-                Task { await loadTournaments() }
+                loadTask?.cancel()
+                loadTask = Task { await loadTournaments() }
             }
         }
         .alert("Tournament", isPresented: $showingAlert) {
@@ -604,13 +718,23 @@ struct TournamentView: View {
     }
     
     private func loadTournaments() async {
+        print("[DEBUG] loadTournaments called")
+        
         isLoading = true
-        defer { isLoading = false }
+        defer { 
+            print("[DEBUG] Setting isLoading to false")
+            isLoading = false 
+        }
         
         do {
+            // Check for cancellation
+            try Task.checkCancellation()
+            
             print("[DEBUG] Loading tournaments from API...")
             tournaments = try await apiService.getTournaments()
             print("[DEBUG] Loaded \(tournaments.count) tournaments")
+        } catch is CancellationError {
+            print("[DEBUG] Load tournaments was cancelled")
         } catch {
             print("[DEBUG] Failed to load tournaments: \(error)")
             alertMessage = "Failed to load tournaments: \(error.localizedDescription)"
@@ -633,7 +757,7 @@ struct TournamentCard: View {
                         Text(tournament.tournament.name)
                             .font(.headline)
                             .foregroundColor(.primary)
-                        Text("18-Day Tournament")
+                        Text("\(tournament.tournament.durationDays)-Day Tournament (Par \(tournament.tournament.durationDays * 4))")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -669,7 +793,7 @@ struct TournamentCard: View {
                                     .bold()
                                     .foregroundColor(.green)
                                 
-                                Text("(\(standing.completedDays)/18)")
+                                Text("(\(standing.completedDays)/\(tournament.tournament.durationDays))")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }
@@ -725,7 +849,7 @@ struct TournamentDetailView: View {
                             .bold()
                             .foregroundColor(.green)
                         
-                        Text("18-Day Wordle Golf Tournament")
+                        Text("\(tournament.tournament.durationDays)-Day Wordle Golf Tournament (Par \(tournament.tournament.durationDays * 4))")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                         
@@ -783,7 +907,7 @@ struct TournamentDetailView: View {
                                                 .font(.headline)
                                                 .bold()
                                                 .foregroundColor(.green)
-                                            Text("\(standing.completedDays)/18")
+                                            Text("\(standing.completedDays)/\(tournament.tournament.durationDays))")
                                                 .font(.caption)
                                                 .foregroundColor(.secondary)
                                         }
@@ -821,6 +945,9 @@ struct TournamentDetailView: View {
     }
     
     private func loadTournamentDetails() async {
+        // Prevent multiple simultaneous loads
+        guard !isLoading else { return }
+        
         isLoading = true
         defer { isLoading = false }
         
@@ -844,7 +971,13 @@ struct TournamentDetailView: View {
 
 struct ShareTournamentView: View {
     let tournament: Tournament
+    let onComplete: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
+    
+    init(tournament: Tournament, onComplete: (() -> Void)? = nil) {
+        self.tournament = tournament
+        self.onComplete = onComplete
+    }
     
     var body: some View {
         NavigationStack {
@@ -885,7 +1018,10 @@ struct ShareTournamentView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
+                    Button("Done") { 
+                        dismiss()
+                        onComplete?()
+                    }
                 }
             }
         }
@@ -898,6 +1034,7 @@ struct CreateTournamentView: View {
     @StateObject private var apiService = APIService.shared
     @State private var tournamentName = ""
     @State private var startDate = Date()
+    @State private var durationDays = 18
     @State private var isLoading = false
     @State private var alertMessage = ""
     @State private var showingAlert = false
@@ -913,7 +1050,7 @@ struct CreateTournamentView: View {
                         .bold()
                         .foregroundColor(.green)
                     
-                    Text("Create an 18-day Wordle golf tournament to compete with friends!")
+                    Text("Create a Wordle golf tournament to compete with friends!")
                         .multilineTextAlignment(.center)
                         .foregroundColor(.secondary)
                 }
@@ -922,6 +1059,18 @@ struct CreateTournamentView: View {
                     TextField("Tournament Name", text: $tournamentName)
                         .textFieldStyle(.roundedBorder)
                         .autocapitalization(.words)
+                    
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Tournament Length")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        
+                        Picker("Duration", selection: $durationDays) {
+                            Text("9 Days (Par 36)").tag(9)
+                            Text("18 Days (Par 72)").tag(18)
+                        }
+                        .pickerStyle(.segmented)
+                    }
                     
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Start Date")
@@ -970,7 +1119,11 @@ struct CreateTournamentView: View {
         }
         .sheet(isPresented: $showingShare) {
             if let tournament = createdTournament {
-                ShareTournamentView(tournament: tournament)
+                ShareTournamentView(tournament: tournament) {
+                    // When share is complete, dismiss the entire create tournament flow
+                    dismiss()
+                    onComplete()
+                }
             }
         }
         .alert("Tournament", isPresented: $showingAlert) {
@@ -995,7 +1148,8 @@ struct CreateTournamentView: View {
             
             let tournament = try await apiService.createTournament(
                 name: tournamentName.trimmingCharacters(in: .whitespaces),
-                startDate: startDateString
+                startDate: startDateString,
+                durationDays: durationDays
             )
             
             createdTournament = tournament
@@ -1116,20 +1270,39 @@ func parseNYTShareString(_ shareString: String) -> (score: Int, date: Date)? {
     let lines = shareString.components(separatedBy: .newlines).filter { !$0.isEmpty }
     guard let firstLine = lines.first else { return nil }
     
-    // Parse "Wordle 1,513 2/6" format
+    // Parse "Wordle 1,XXX Y/6" format (where Y can be 1-6 or X for failed)
     let components = firstLine.components(separatedBy: " ")
     guard components.count >= 3,
           components[0].lowercased() == "wordle",
           components[2].contains("/") else { return nil }
     
-    // Extract score from "2/6" format - the number before the slash
+    // Extract score from "2/6" or "X/6" format
     let scoreParts = components[2].components(separatedBy: "/")
     guard scoreParts.count == 2,
-          let score = Int(scoreParts[0]) else { return nil }
+          scoreParts[1] == "6" else { return nil } // Ensure it's out of 6
     
-    // Count emoji lines to verify the score
+    let scoreString = scoreParts[0].uppercased()
+    let score: Int
+    
+    // Handle both numeric scores (1-6) and X (failed)
+    if scoreString == "X" {
+        score = 7 // Use 7 to represent failed/DNF
+    } else if let numericScore = Int(scoreString), numericScore >= 1 && numericScore <= 6 {
+        score = numericScore
+    } else {
+        return nil // Invalid score format
+    }
+    
+    // Count emoji lines to verify the score matches
     let emojiLines = lines.filter { line in
         line.contains("🟨") || line.contains("🟩") || line.contains("⬜") || line.contains("⬛")
+    }
+    
+    // For successful solves (1-6), emoji lines should match the score
+    // For failed attempts (X), there should be exactly 6 emoji lines
+    let expectedEmojiLines = (score == 7) ? 6 : score
+    if emojiLines.count != expectedEmojiLines {
+        return nil // Mismatch between declared score and actual emoji lines
     }
     
     // Return the score from the share text (we'll use selectedDate from the UI)

@@ -144,20 +144,21 @@ class InMemoryStorage:
         return leaderboard[:limit]
     
     # Tournament methods
-    def create_tournament(self, name: str, start_date: str, created_by: str) -> Tournament:
+    def create_tournament(self, name: str, start_date: str, duration_days: int, created_by: str) -> Tournament:
         """Create a new tournament"""
         from datetime import datetime, timedelta
         tournament_id = str(uuid.uuid4())
         
-        # Calculate end date (18 days after start)
+        # Calculate end date based on duration (9 or 18 days)
         start = datetime.strptime(start_date, "%Y-%m-%d")
-        end_date = (start + timedelta(days=17)).strftime("%Y-%m-%d")  # 18 days total (0-17)
+        end_date = (start + timedelta(days=duration_days - 1)).strftime("%Y-%m-%d")
         
         tournament = Tournament(
             tournament_id=tournament_id,
             name=name,
             start_date=start_date,
             end_date=end_date,
+            duration_days=duration_days,
             created_by=created_by,
             participants=[created_by],  # Creator is automatically a participant
             created_at=datetime.utcnow(),

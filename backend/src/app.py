@@ -106,6 +106,7 @@ async def create_tournament(tournament_create: TournamentCreate, current_user = 
         tournament = storage.create_tournament(
             name=tournament_create.name,
             start_date=tournament_create.start_date,
+            duration_days=tournament_create.duration_days,
             created_by=current_user.user_id
         )
         return tournament

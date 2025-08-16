@@ -50,12 +50,14 @@ class LeaderboardEntry(BaseModel):
 class TournamentCreate(BaseModel):
     name: str = Field(..., min_length=3, max_length=100)
     start_date: str  # YYYY-MM-DD format
+    duration_days: int = Field(default=18, ge=9, le=18)  # 9 or 18 days
 
 class Tournament(BaseModel):
     tournament_id: str
     name: str
     start_date: str
     end_date: str
+    duration_days: int  # 9 or 18 days
     created_by: str
     participants: List[str]
     created_at: datetime
@@ -87,7 +89,7 @@ class TournamentSummary(BaseModel):
 def calculate_golf_score(status: Status, guesses_used: Optional[int]) -> int:
     """Convert Wordle guesses to golf scores according to spec"""
     if status == Status.DNF:
-        return 5  # OB/DNF
+        return 4  # Penalty for failing to guess correctly
     
     if guesses_used is None:
         raise ValueError("guesses_used required for solved status")
@@ -98,7 +100,7 @@ def calculate_golf_score(status: Status, guesses_used: Optional[int]) -> int:
         3: -1,  # Birdie
         4: 0,   # Par
         5: 1,   # Bogey
-        6: 4,   # Snowman
+        6: 2,   # Double Bogey
     }
     
     if guesses_used not in golf_mapping:

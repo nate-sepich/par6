@@ -242,11 +242,19 @@ class APIService: ObservableObject {
     
     // MARK: - Tournament Management
     
-    func createTournament(name: String, startDate: String) async throws -> Tournament {
-        let body = try encoder.encode([
-            "name": name,
-            "start_date": startDate
-        ])
+    func createTournament(name: String, startDate: String, durationDays: Int = 18) async throws -> Tournament {
+        struct TournamentCreateRequest: Codable {
+            let name: String
+            let start_date: String
+            let duration_days: Int
+        }
+        
+        let request = TournamentCreateRequest(
+            name: name,
+            start_date: startDate,
+            duration_days: durationDays
+        )
+        let body = try encoder.encode(request)
         
         return try await makeRequest(
             endpoint: "/tournaments",

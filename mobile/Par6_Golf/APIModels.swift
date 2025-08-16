@@ -102,7 +102,8 @@ struct Tournament: Codable, Identifiable {
     let id: String
     let name: String
     let startDate: String // yyyy-MM-dd format
-    let endDate: String   // 18 days after start
+    let endDate: String   // duration_days after start
+    let durationDays: Int // 9 or 18 days
     let createdBy: String
     let participants: [String] // Array of user IDs
     let createdAt: Date
@@ -113,6 +114,7 @@ struct Tournament: Codable, Identifiable {
         case name
         case startDate = "start_date"
         case endDate = "end_date"
+        case durationDays = "duration_days"
         case createdBy = "created_by"
         case participants
         case createdAt = "created_at"
