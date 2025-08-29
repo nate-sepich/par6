@@ -8,6 +8,7 @@ class Status(str, Enum):
     SOLVED = "solved"
     DNF = "dnf"
 
+
 class UserCreate(BaseModel):
     handle: str = Field(..., min_length=3, max_length=24)
 
@@ -47,10 +48,16 @@ class LeaderboardEntry(BaseModel):
 
 # Tournament Models
 
+class TournamentStatus(str, Enum):
+    ACTIVE = "active"
+    ENDED = "ended"
+    ARCHIVED = "archived"
+
 class TournamentCreate(BaseModel):
     name: str = Field(..., min_length=3, max_length=100)
     start_date: str  # YYYY-MM-DD format
     duration_days: int = Field(default=18, ge=9, le=18)  # 9 or 18 days
+    tournament_type: str = Field(default="private")  # "public" or "private"
 
 class Tournament(BaseModel):
     tournament_id: str
@@ -62,6 +69,10 @@ class Tournament(BaseModel):
     participants: List[str]
     created_at: datetime
     is_active: bool
+    status: TournamentStatus
+    tournament_type: str = "private"  # "public" or "private"
+    ended_at: Optional[datetime] = None
+    winner_user_id: Optional[str] = None
 
 class TournamentScore(BaseModel):
     tournament_score_id: str
@@ -85,6 +96,16 @@ class TournamentSummary(BaseModel):
     tournament: Tournament
     standings: List[TournamentStanding]
     user_participating: bool
+
+class TournamentFinalResults(BaseModel):
+    tournament_id: str
+    tournament: Tournament
+    winner: Optional[TournamentStanding]
+    final_standings: List[TournamentStanding]
+    ended_at: datetime
+    total_participants: int
+    completed_days: int
+
 
 def calculate_golf_score(status: Status, guesses_used: Optional[int]) -> int:
     """Convert Wordle guesses to golf scores according to spec"""

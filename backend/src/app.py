@@ -107,7 +107,8 @@ async def create_tournament(tournament_create: TournamentCreate, current_user = 
             name=tournament_create.name,
             start_date=tournament_create.start_date,
             duration_days=tournament_create.duration_days,
-            created_by=current_user.user_id
+            created_by=current_user.user_id,
+            tournament_type=tournament_create.tournament_type
         )
         return tournament
     except ValueError as e:
@@ -119,11 +120,39 @@ async def get_tournaments(current_user = Depends(get_current_user)):
     tournaments = storage.get_tournaments(current_user.user_id)
     return tournaments
 
+# Public tournament endpoints (must come before parameterized routes)
+@app.get("/api/tournaments/public", response_model=List[TournamentSummary])
+async def get_public_tournaments(limit: int = 20, offset: int = 0):
+    """Get public tournaments"""
+    try:
+        public_tournaments = storage.get_public_tournaments(limit=limit, offset=offset)
+        return public_tournaments
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/tournaments/search", response_model=List[TournamentSummary]) 
+async def search_tournaments(q: str, limit: int = 20):
+    """Search public tournaments by name"""
+    try:
+        search_results = storage.search_public_tournaments(query=q, limit=limit)
+        return search_results
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/api/tournaments/{tournament_id}/join", response_model=Tournament)
 async def join_tournament(tournament_id: str, current_user = Depends(get_current_user)):
     """Join a tournament"""
     try:
         tournament = storage.join_tournament(tournament_id, current_user.user_id)
+        return tournament
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.delete("/api/tournaments/{tournament_id}/leave", response_model=Tournament)
+async def leave_tournament(tournament_id: str, current_user = Depends(get_current_user)):
+    """Leave a tournament"""
+    try:
+        tournament = storage.leave_tournament(tournament_id, current_user.user_id)
         return tournament
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -136,6 +165,18 @@ async def get_tournament_details(tournament_id: str, current_user = Depends(get_
         return tournament_summary
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+@app.delete("/api/tournaments/{tournament_id}")
+async def delete_tournament(tournament_id: str, current_user = Depends(get_current_user)):
+    """Delete a tournament (creator only)"""
+    try:
+        storage.delete_tournament(tournament_id, current_user.user_id)
+        return {"message": "Tournament deleted successfully"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
 
 def lambda_handler(event, context):
     """Lambda handler for API Gateway events"""

@@ -38,7 +38,7 @@ class APIService: ObservableObject {
     static let shared = APIService()
     
     private let baseURL: String = {
-        return ProcessInfo.processInfo.environment["API_BASE_URL"] ?? "https://9d4oqidsq0.execute-api.us-west-2.amazonaws.com/dev/api"
+        return ProcessInfo.processInfo.environment["API_BASE_URL"] ?? "https://e8iz7pt9q0.execute-api.us-west-2.amazonaws.com/prod/api"
     }()
     private let session = URLSession.shared
     private let decoder = JSONDecoder()
@@ -56,10 +56,38 @@ class APIService: ObservableObject {
     }
     
     private func setupDateFormatting() {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSSSS"
-        decoder.dateDecodingStrategy = .formatted(formatter)
-        encoder.dateEncodingStrategy = .formatted(formatter)
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let dateString = try container.decode(String.self)
+            
+            // Try different date formats
+            let formatter1 = DateFormatter()
+            formatter1.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSSSS"
+            if let date = formatter1.date(from: dateString) {
+                return date
+            }
+            
+            let formatter2 = DateFormatter()
+            formatter2.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+            if let date = formatter2.date(from: dateString) {
+                return date
+            }
+            
+            let formatter3 = DateFormatter()
+            formatter3.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSZ"
+            if let date = formatter3.date(from: dateString) {
+                return date
+            }
+            
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(codingPath: decoder.codingPath,
+                                    debugDescription: "Date string '\(dateString)' does not match any expected format")
+            )
+        }
+        
+        let encoder_formatter = DateFormatter()
+        encoder_formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSSSS"
+        encoder.dateEncodingStrategy = .formatted(encoder_formatter)
     }
     
     // MARK: - Session Persistence
@@ -242,17 +270,19 @@ class APIService: ObservableObject {
     
     // MARK: - Tournament Management
     
-    func createTournament(name: String, startDate: String, durationDays: Int = 18) async throws -> Tournament {
+    func createTournament(name: String, startDate: String, durationDays: Int = 18, tournamentType: String = "private") async throws -> Tournament {
         struct TournamentCreateRequest: Codable {
             let name: String
             let start_date: String
             let duration_days: Int
+            let tournament_type: String
         }
         
         let request = TournamentCreateRequest(
             name: name,
             start_date: startDate,
-            duration_days: durationDays
+            duration_days: durationDays,
+            tournament_type: tournamentType
         )
         let body = try encoder.encode(request)
         
@@ -275,12 +305,9 @@ class APIService: ObservableObject {
     }
     
     func joinTournament(tournamentId: String) async throws -> Tournament {
-        let body = try encoder.encode(["tournament_id": tournamentId])
-        
         return try await makeRequest(
             endpoint: "/tournaments/\(tournamentId)/join",
             method: "POST",
-            body: body,
             requiresAuth: true
         )
     }
@@ -292,9 +319,41 @@ class APIService: ObservableObject {
         )
     }
     
+    func leaveTournament(tournamentId: String) async throws {
+        let _: Tournament = try await makeRequest(
+            endpoint: "/tournaments/\(tournamentId)/leave",
+            method: "DELETE",
+            requiresAuth: true
+        )
+    }
+    
+    func deleteTournament(tournamentId: String) async throws {
+        let _: [String: String] = try await makeRequest(
+            endpoint: "/tournaments/\(tournamentId)",
+            method: "DELETE",
+            requiresAuth: true
+        )
+    }
+    
+    func getPublicTournaments(limit: Int = 20, offset: Int = 0) async throws -> [TournamentSummary] {
+        return try await makeRequest(
+            endpoint: "/tournaments/public?limit=\(limit)&offset=\(offset)",
+            requiresAuth: false
+        )
+    }
+    
+    func searchTournaments(query: String, limit: Int = 20) async throws -> [TournamentSummary] {
+        let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
+        return try await makeRequest(
+            endpoint: "/tournaments/search?q=\(encodedQuery)&limit=\(limit)",
+            requiresAuth: false
+        )
+    }
+    
     func shareTournament(tournamentId: String) -> String {
         return "Join my Par6 Golf tournament! Tournament ID: \(tournamentId)\n\nDownload Par6 Golf to compete in our 18-day Wordle golf match!"
     }
+    
     
     // MARK: - Utility
     

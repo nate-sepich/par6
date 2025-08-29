@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import uuid
 from boto3.dynamodb.conditions import Key, Attr
 from botocore.exceptions import ClientError
-from models import User, Score, Status, calculate_golf_score, Tournament, TournamentSummary, TournamentStanding
+from models import User, Score, Status, calculate_golf_score, Tournament, TournamentSummary, TournamentStanding, TournamentStatus, TournamentFinalResults
 
 class ReadableDynamoDBStorage:
     """
@@ -311,7 +311,7 @@ class ReadableDynamoDBStorage:
             return []
     
     # Tournament methods - Full DynamoDB implementation
-    def create_tournament(self, name: str, start_date: str, duration_days: int, created_by: str) -> Tournament:
+    def create_tournament(self, name: str, start_date: str, duration_days: int, created_by: str, tournament_type: str = "private") -> Tournament:
         """Create a new tournament"""
         from datetime import datetime, timedelta
         tournament_id = self._generate_id()
@@ -330,7 +330,9 @@ class ReadableDynamoDBStorage:
             created_by=created_by,
             participants=[created_by],
             created_at=now,
-            is_active=True
+            is_active=True,
+            status=TournamentStatus.ACTIVE,
+            tournament_type=tournament_type
         )
         
         try:
@@ -344,7 +346,9 @@ class ReadableDynamoDBStorage:
                 'created_by': created_by,
                 'participants': [created_by],
                 'created_at': now.isoformat(),
-                'is_active': True
+                'is_active': True,
+                'status': TournamentStatus.ACTIVE.value,
+                'tournament_type': tournament_type
             })
             
             # Also create participant record for easier querying
@@ -389,6 +393,11 @@ class ReadableDynamoDBStorage:
                 if 'Item' in tournament_response:
                     tournament_item = tournament_response['Item']
                     
+                    # Skip soft-deleted tournaments (is_active = False)
+                    if not tournament_item.get('is_active', True):
+                        print(f"[DEBUG] Skipping inactive tournament: {tournament_id}")
+                        continue
+                    
                     tournament = Tournament(
                         tournament_id=tournament_item['tournament_id'],
                         name=tournament_item['name'],
@@ -398,7 +407,11 @@ class ReadableDynamoDBStorage:
                         created_by=tournament_item['created_by'],
                         participants=tournament_item['participants'],
                         created_at=datetime.fromisoformat(tournament_item['created_at']),
-                        is_active=tournament_item['is_active']
+                        is_active=tournament_item['is_active'],
+                        status=TournamentStatus(tournament_item.get('status', 'active' if tournament_item['is_active'] else 'ended')),
+                        tournament_type=tournament_item.get('tournament_type', 'private'),  # Default to private for backward compatibility
+                        ended_at=datetime.fromisoformat(tournament_item['ended_at']) if tournament_item.get('ended_at') else None,
+                        winner_user_id=tournament_item.get('winner_user_id')
                     )
                     
                     standings = self._calculate_tournament_standings(tournament_id, user_id)
@@ -417,9 +430,53 @@ class ReadableDynamoDBStorage:
             print(f"[ERROR] get_tournaments: {e}")
             return []
     
-    def join_tournament(self, tournament_id: str, user_id: str) -> Tournament:
-        """Join a tournament"""
+    def _find_tournament_by_short_id(self, short_id: str) -> Optional[str]:
+        """Find tournament by 8-character prefix"""
         try:
+            search_prefix = short_id.lower()
+            print(f"[DEBUG] Searching for tournament with prefix: '{search_prefix}' (original: '{short_id}')")
+            
+            # Scan for tournaments that start with the short_id
+            response = self.tournaments_table.scan(
+                FilterExpression=Attr('tournament_id').begins_with(search_prefix) & 
+                                ~Attr('tournament_id').contains('#participant#'),
+                Limit=5  # Limit to avoid too many results
+            )
+            
+            items = response.get('Items', [])
+            print(f"[DEBUG] Found {len(items)} tournaments matching prefix '{search_prefix}'")
+            
+            if len(items) == 1:
+                found_id = items[0]['tournament_id']
+                print(f"[DEBUG] Found exact match: {found_id}")
+                return found_id
+            elif len(items) > 1:
+                tournament_ids = [item['tournament_id'] for item in items]
+                print(f"[DEBUG] Multiple tournaments found: {tournament_ids}")
+                raise ValueError(f"Multiple tournaments found with code '{short_id.upper()}'. Please use the full tournament ID.")
+            else:
+                print(f"[DEBUG] No tournaments found with prefix '{search_prefix}'")
+                return None
+                
+        except ClientError as e:
+            print(f"[ERROR] _find_tournament_by_short_id: {e}")
+            return None
+
+    def join_tournament(self, tournament_id: str, user_id: str) -> Tournament:
+        """Join a tournament by full ID or 8-character code"""
+        try:
+            print(f"[DEBUG] join_tournament called with tournament_id='{tournament_id}', user_id='{user_id}'")
+            
+            # If tournament_id is 8 characters or less, try to find by prefix
+            if len(tournament_id) <= 8:
+                print(f"[DEBUG] Short ID detected, searching for full tournament ID")
+                full_id = self._find_tournament_by_short_id(tournament_id)
+                if not full_id:
+                    print(f"[ERROR] No tournament found with join code '{tournament_id.upper()}'")
+                    raise ValueError(f"No tournament found with join code '{tournament_id.upper()}'")
+                print(f"[DEBUG] Resolved short ID '{tournament_id}' to full ID '{full_id}'")
+                tournament_id = full_id
+            
             # Get tournament record
             tournament_response = self.tournaments_table.get_item(
                 Key={'tournament_id': tournament_id}
@@ -461,11 +518,74 @@ class ReadableDynamoDBStorage:
                 created_by=tournament_item['created_by'],
                 participants=participants,
                 created_at=datetime.fromisoformat(tournament_item['created_at']),
-                is_active=tournament_item['is_active']
+                is_active=tournament_item['is_active'],
+                status=TournamentStatus(tournament_item.get('status', 'active' if tournament_item['is_active'] else 'ended')),
+                tournament_type=tournament_item.get('tournament_type', 'private'),  # Default to private for backward compatibility
+                ended_at=datetime.fromisoformat(tournament_item['ended_at']) if tournament_item.get('ended_at') else None,
+                winner_user_id=tournament_item.get('winner_user_id')
             )
             
         except ClientError as e:
             raise ValueError(f"Error joining tournament: {e}")
+    
+    def leave_tournament(self, tournament_id: str, user_id: str) -> Tournament:
+        """Leave a tournament"""
+        try:
+            # Get tournament record
+            tournament_response = self.tournaments_table.get_item(
+                Key={'tournament_id': tournament_id}
+            )
+            
+            if 'Item' not in tournament_response:
+                raise ValueError("Tournament not found")
+            
+            tournament_item = tournament_response['Item']
+            participants = tournament_item.get('participants', [])
+            
+            # Check if user is actually a participant
+            if user_id not in participants:
+                raise ValueError("User is not a participant in this tournament")
+            
+            # Remove user from participants
+            participants.remove(user_id)
+            
+            # Update tournament record
+            self.tournaments_table.update_item(
+                Key={'tournament_id': tournament_id},
+                UpdateExpression='SET participants = :participants',
+                ExpressionAttributeValues={':participants': participants}
+            )
+            
+            # Remove participant record
+            try:
+                self.tournaments_table.delete_item(
+                    Key={'tournament_id': f"{tournament_id}#participant#{user_id}"}
+                )
+            except ClientError as e:
+                # Log warning but don't fail the operation if participant record doesn't exist
+                print(f"[WARNING] Could not delete participant record: {e}")
+            
+            print(f"[TELEMETRY] tournament_left: {tournament_id} by {user_id}")
+            
+            # Return updated tournament
+            return Tournament(
+                tournament_id=tournament_item['tournament_id'],
+                name=tournament_item['name'],
+                start_date=tournament_item['start_date'],
+                end_date=tournament_item['end_date'],
+                duration_days=tournament_item.get('duration_days', 18),
+                created_by=tournament_item['created_by'],
+                participants=participants,
+                created_at=datetime.fromisoformat(tournament_item['created_at']),
+                is_active=tournament_item['is_active'],
+                status=TournamentStatus(tournament_item.get('status', 'active' if tournament_item['is_active'] else 'ended')),
+                tournament_type=tournament_item.get('tournament_type', 'private'),
+                ended_at=datetime.fromisoformat(tournament_item['ended_at']) if tournament_item.get('ended_at') else None,
+                winner_user_id=tournament_item.get('winner_user_id')
+            )
+            
+        except ClientError as e:
+            raise ValueError(f"Error leaving tournament: {e}")
     
     def get_tournament_details(self, tournament_id: str, user_id: str) -> TournamentSummary:
         """Get tournament details and standings"""
@@ -489,7 +609,11 @@ class ReadableDynamoDBStorage:
                 created_by=tournament_item['created_by'],
                 participants=tournament_item['participants'],
                 created_at=datetime.fromisoformat(tournament_item['created_at']),
-                is_active=tournament_item['is_active']
+                is_active=tournament_item['is_active'],
+                status=TournamentStatus(tournament_item.get('status', 'active' if tournament_item['is_active'] else 'ended')),
+                tournament_type=tournament_item.get('tournament_type', 'private'),  # Default to private for backward compatibility
+                ended_at=datetime.fromisoformat(tournament_item['ended_at']) if tournament_item.get('ended_at') else None,
+                winner_user_id=tournament_item.get('winner_user_id')
             )
             
             standings = self._calculate_tournament_standings(tournament_id, user_id)
@@ -570,6 +694,299 @@ class ReadableDynamoDBStorage:
         except ClientError as e:
             print(f"[ERROR] _calculate_tournament_standings: {e}")
             return []
+    
+    def end_tournament(self, tournament_id: str, user_id: str) -> TournamentFinalResults:
+        """End a tournament and return final results"""
+        try:
+            # Get tournament details
+            tournament_response = self.tournaments_table.get_item(
+                Key={'tournament_id': tournament_id}
+            )
+            
+            if 'Item' not in tournament_response:
+                raise ValueError("Tournament not found")
+            
+            tournament_item = tournament_response['Item']
+            
+            # Verify user is the creator
+            if tournament_item['created_by'] != user_id:
+                raise ValueError("Only the tournament creator can end the tournament")
+            
+            # Check if already ended
+            if not tournament_item.get('is_active', True):
+                raise ValueError("Tournament is already ended")
+            
+            now = datetime.utcnow()
+            
+            # Calculate final standings
+            standings = self._calculate_tournament_standings(tournament_id, user_id)
+            winner = standings[0] if standings else None
+            
+            # Update tournament to ended status
+            update_expression = "SET #status = :status, is_active = :is_active, ended_at = :ended_at"
+            expression_values = {
+                ':status': TournamentStatus.ENDED.value,
+                ':is_active': False,
+                ':ended_at': now.isoformat()
+            }
+            
+            if winner:
+                update_expression += ", winner_user_id = :winner_user_id"
+                expression_values[':winner_user_id'] = winner.user_id
+            
+            self.tournaments_table.update_item(
+                Key={'tournament_id': tournament_id},
+                UpdateExpression=update_expression,
+                ExpressionAttributeNames={'#status': 'status'},
+                ExpressionAttributeValues=expression_values
+            )
+            
+            # Create updated tournament object
+            tournament = Tournament(
+                tournament_id=tournament_item['tournament_id'],
+                name=tournament_item['name'],
+                start_date=tournament_item['start_date'],
+                end_date=tournament_item['end_date'],
+                duration_days=tournament_item.get('duration_days', 18),
+                created_by=tournament_item['created_by'],
+                participants=tournament_item['participants'],
+                created_at=datetime.fromisoformat(tournament_item['created_at']),
+                is_active=False,
+                status=TournamentStatus.ENDED,
+                tournament_type=tournament_item.get('tournament_type', 'private'),
+                ended_at=now,
+                winner_user_id=winner.user_id if winner else None
+            )
+            
+            # Return final results
+            return TournamentFinalResults(
+                tournament_id=tournament_id,
+                tournament=tournament,
+                winner=winner,
+                final_standings=standings,
+                ended_at=now,
+                total_participants=len(tournament_item['participants']),
+                completed_days=tournament_item.get('duration_days', 18)
+            )
+            
+        except ClientError as e:
+            raise ValueError(f"Error ending tournament: {e}")
+    
+    def get_tournament_final_results(self, tournament_id: str) -> TournamentFinalResults:
+        """Get final results for an ended tournament"""
+        try:
+            tournament_response = self.tournaments_table.get_item(
+                Key={'tournament_id': tournament_id}
+            )
+            
+            if 'Item' not in tournament_response:
+                raise ValueError("Tournament not found")
+            
+            tournament_item = tournament_response['Item']
+            
+            # Check if tournament is ended
+            if tournament_item.get('is_active', True):
+                raise ValueError("Tournament is still active")
+            
+            # Calculate standings
+            standings = self._calculate_tournament_standings(tournament_id, tournament_item['created_by'])
+            winner = standings[0] if standings else None
+            
+            tournament = Tournament(
+                tournament_id=tournament_item['tournament_id'],
+                name=tournament_item['name'],
+                start_date=tournament_item['start_date'],
+                end_date=tournament_item['end_date'],
+                duration_days=tournament_item.get('duration_days', 18),
+                created_by=tournament_item['created_by'],
+                participants=tournament_item['participants'],
+                created_at=datetime.fromisoformat(tournament_item['created_at']),
+                is_active=tournament_item['is_active'],
+                status=TournamentStatus(tournament_item.get('status', 'ended')),
+                tournament_type=tournament_item.get('tournament_type', 'private'),
+                ended_at=datetime.fromisoformat(tournament_item['ended_at']) if tournament_item.get('ended_at') else None,
+                winner_user_id=tournament_item.get('winner_user_id')
+            )
+            
+            return TournamentFinalResults(
+                tournament_id=tournament_id,
+                tournament=tournament,
+                winner=winner,
+                final_standings=standings,
+                ended_at=tournament.ended_at or datetime.utcnow(),
+                total_participants=len(tournament_item['participants']),
+                completed_days=tournament_item.get('duration_days', 18)
+            )
+            
+        except ClientError as e:
+            raise ValueError(f"Error getting tournament final results: {e}")
+    
+    def auto_end_expired_tournaments(self) -> List[str]:
+        """Auto-end tournaments that have passed their end date"""
+        try:
+            ended_tournament_ids = []
+            today = datetime.utcnow().strftime("%Y-%m-%d")
+            
+            # Scan for active tournaments that have expired
+            response = self.tournaments_table.scan(
+                FilterExpression=Attr('is_active').eq(True) & Attr('end_date').lt(today)
+            )
+            
+            for tournament_item in response.get('Items', []):
+                tournament_id = tournament_item['tournament_id']
+                # Skip participant records
+                if '#participant#' in tournament_id:
+                    continue
+                
+                try:
+                    # End the tournament
+                    self.end_tournament(tournament_id, tournament_item['created_by'])
+                    ended_tournament_ids.append(tournament_id)
+                    print(f"[INFO] Auto-ended tournament: {tournament_id}")
+                except Exception as e:
+                    print(f"[ERROR] Failed to auto-end tournament {tournament_id}: {e}")
+            
+            return ended_tournament_ids
+            
+        except ClientError as e:
+            print(f"[ERROR] auto_end_expired_tournaments: {e}")
+            return []
+    
+    def get_public_tournaments(self, limit: int = 20, offset: int = 0) -> List[TournamentSummary]:
+        """Get public tournaments for discovery"""
+        try:
+            # Scan for public tournaments (could be optimized with GSI later)
+            response = self.tournaments_table.scan(
+                FilterExpression=Attr('tournament_type').eq('public') & ~Attr('tournament_id').contains('#participant#'),
+                Limit=limit
+            )
+            
+            public_tournaments = []
+            for tournament_item in response.get('Items', []):
+                try:
+                    tournament = Tournament(
+                        tournament_id=tournament_item['tournament_id'],
+                        name=tournament_item['name'],
+                        start_date=tournament_item['start_date'],
+                        end_date=tournament_item['end_date'],
+                        duration_days=tournament_item.get('duration_days', 18),
+                        created_by=tournament_item['created_by'],
+                        participants=tournament_item['participants'],
+                        created_at=datetime.fromisoformat(tournament_item['created_at']),
+                        is_active=tournament_item['is_active'],
+                        status=TournamentStatus(tournament_item.get('status', 'active' if tournament_item['is_active'] else 'ended')),
+                        tournament_type=tournament_item.get('tournament_type', 'private'),
+                        ended_at=datetime.fromisoformat(tournament_item['ended_at']) if tournament_item.get('ended_at') else None,
+                        winner_user_id=tournament_item.get('winner_user_id')
+                    )
+                    
+                    # Calculate standings (no user_id needed for public view)
+                    standings = self._calculate_tournament_standings(tournament_item['tournament_id'], tournament_item['created_by'])
+                    
+                    summary = TournamentSummary(
+                        tournament_id=tournament_item['tournament_id'],
+                        tournament=tournament,
+                        standings=standings,
+                        user_participating=False  # Not relevant for public discovery
+                    )
+                    public_tournaments.append(summary)
+                    
+                except Exception as e:
+                    print(f"[ERROR] Error processing public tournament {tournament_item.get('tournament_id')}: {e}")
+                    continue
+            
+            return public_tournaments
+            
+        except ClientError as e:
+            print(f"[ERROR] get_public_tournaments: {e}")
+            return []
+    
+    def search_public_tournaments(self, query: str, limit: int = 20) -> List[TournamentSummary]:
+        """Search public tournaments by name"""
+        try:
+            # Use scan with filter for name search (could be optimized with text search later)
+            response = self.tournaments_table.scan(
+                FilterExpression=Attr('tournament_type').eq('public') & 
+                                ~Attr('tournament_id').contains('#participant#') & 
+                                Attr('name').contains(query),
+                Limit=limit
+            )
+            
+            search_results = []
+            for tournament_item in response.get('Items', []):
+                try:
+                    tournament = Tournament(
+                        tournament_id=tournament_item['tournament_id'],
+                        name=tournament_item['name'],
+                        start_date=tournament_item['start_date'],
+                        end_date=tournament_item['end_date'],
+                        duration_days=tournament_item.get('duration_days', 18),
+                        created_by=tournament_item['created_by'],
+                        participants=tournament_item['participants'],
+                        created_at=datetime.fromisoformat(tournament_item['created_at']),
+                        is_active=tournament_item['is_active'],
+                        status=TournamentStatus(tournament_item.get('status', 'active' if tournament_item['is_active'] else 'ended')),
+                        tournament_type=tournament_item.get('tournament_type', 'private'),
+                        ended_at=datetime.fromisoformat(tournament_item['ended_at']) if tournament_item.get('ended_at') else None,
+                        winner_user_id=tournament_item.get('winner_user_id')
+                    )
+                    
+                    # Calculate standings (no user_id needed for public view)
+                    standings = self._calculate_tournament_standings(tournament_item['tournament_id'], tournament_item['created_by'])
+                    
+                    summary = TournamentSummary(
+                        tournament_id=tournament_item['tournament_id'],
+                        tournament=tournament,
+                        standings=standings,
+                        user_participating=False  # Not relevant for public search
+                    )
+                    search_results.append(summary)
+                    
+                except Exception as e:
+                    print(f"[ERROR] Error processing search result {tournament_item.get('tournament_id')}: {e}")
+                    continue
+            
+            return search_results
+            
+        except ClientError as e:
+            print(f"[ERROR] search_public_tournaments: {e}")
+            return []
+    
+    def delete_tournament(self, tournament_id: str, user_id: str) -> None:
+        """Soft delete a tournament (creator only) - marks as inactive"""
+        try:
+            # Get tournament record to verify ownership
+            tournament_response = self.tournaments_table.get_item(
+                Key={'tournament_id': tournament_id}
+            )
+            
+            if 'Item' not in tournament_response:
+                raise ValueError("Tournament not found")
+            
+            tournament_item = tournament_response['Item']
+            
+            # Verify user is the creator
+            if tournament_item['created_by'] != user_id:
+                raise PermissionError("Only the tournament creator can delete the tournament")
+            
+            print(f"[DEBUG] Soft deleting tournament {tournament_id}")
+            
+            # Soft delete by setting is_active to False and adding deleted timestamp
+            now = datetime.utcnow()
+            self.tournaments_table.update_item(
+                Key={'tournament_id': tournament_id},
+                UpdateExpression='SET is_active = :is_active, deleted_at = :deleted_at',
+                ExpressionAttributeValues={
+                    ':is_active': False,
+                    ':deleted_at': now.isoformat()
+                }
+            )
+            
+            print(f"[TELEMETRY] tournament_soft_deleted: {tournament_id} by {user_id}")
+            
+        except ClientError as e:
+            print(f"[ERROR] delete_tournament: {e}")
+            raise ValueError(f"Error deleting tournament: {e}")
 
 # Global storage instance
 storage = ReadableDynamoDBStorage()

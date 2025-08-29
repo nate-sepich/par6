@@ -184,8 +184,26 @@ class InMemoryStorage:
                 summaries.append(summary)
         return summaries
     
+    def _find_tournament_by_short_id(self, short_id: str) -> Optional[str]:
+        """Find tournament by 8-character prefix"""
+        matches = [tid for tid in self.tournaments.keys() if tid.startswith(short_id.lower())]
+        
+        if len(matches) == 1:
+            return matches[0]
+        elif len(matches) > 1:
+            raise ValueError(f"Multiple tournaments found with code '{short_id.upper()}'. Please use the full tournament ID.")
+        else:
+            return None
+    
     def join_tournament(self, tournament_id: str, user_id: str) -> Tournament:
-        """Join a tournament"""
+        """Join a tournament by full ID or 8-character code"""
+        # If tournament_id is 8 characters or less, try to find by prefix
+        if len(tournament_id) <= 8:
+            full_id = self._find_tournament_by_short_id(tournament_id)
+            if not full_id:
+                raise ValueError(f"No tournament found with join code '{tournament_id.upper()}'")
+            tournament_id = full_id
+            
         if tournament_id not in self.tournaments:
             raise ValueError("Tournament not found")
         
@@ -194,6 +212,21 @@ class InMemoryStorage:
             tournament.participants.append(user_id)
             self.tournaments[tournament_id] = tournament
             print(f"[TELEMETRY] tournament_joined: {tournament_id} by {user_id}")
+        
+        return tournament
+    
+    def leave_tournament(self, tournament_id: str, user_id: str) -> Tournament:
+        """Leave a tournament"""
+        if tournament_id not in self.tournaments:
+            raise ValueError("Tournament not found")
+        
+        tournament = self.tournaments[tournament_id]
+        if user_id not in tournament.participants:
+            raise ValueError("User is not a participant in this tournament")
+        
+        tournament.participants.remove(user_id)
+        self.tournaments[tournament_id] = tournament
+        print(f"[TELEMETRY] tournament_left: {tournament_id} by {user_id}")
         
         return tournament
     

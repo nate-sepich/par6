@@ -26,3 +26,4 @@ stack_name = "par6-golf-backend-staging"
 parameter_overrides = "Environment=prod"
 stack_name = "par6-golf-backend-prod"
 confirm_changeset = false
+region = "us-west-2"

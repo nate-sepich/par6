@@ -12,6 +12,7 @@ enum Status: String, Codable, CaseIterable {
     case dnf = "dnf"
 }
 
+
 struct UserCreate: Codable {
     let handle: String
 }
@@ -98,6 +99,12 @@ struct LeaderboardEntry: Codable, Identifiable {
 
 // MARK: - Tournament Models
 
+enum TournamentStatus: String, Codable, CaseIterable {
+    case active = "active"
+    case ended = "ended"
+    case archived = "archived"
+}
+
 struct Tournament: Codable, Identifiable {
     let id: String
     let name: String
@@ -108,6 +115,10 @@ struct Tournament: Codable, Identifiable {
     let participants: [String] // Array of user IDs
     let createdAt: Date
     let isActive: Bool
+    let status: TournamentStatus
+    let tournamentType: String // "public" or "private"
+    let endedAt: Date? // Optional - when tournament ended
+    let winnerUserId: String? // Optional - winner user ID
     
     enum CodingKeys: String, CodingKey {
         case id = "tournament_id"
@@ -119,6 +130,10 @@ struct Tournament: Codable, Identifiable {
         case participants
         case createdAt = "created_at"
         case isActive = "is_active"
+        case status
+        case tournamentType = "tournament_type"
+        case endedAt = "ended_at"
+        case winnerUserId = "winner_user_id"
     }
 }
 
@@ -175,3 +190,4 @@ struct TournamentSummary: Codable, Identifiable {
         case userParticipating = "user_participating"
     }
 }
+
