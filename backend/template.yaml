@@ -65,6 +65,26 @@ Resources:
         - DynamoDBCrudPolicy:
             TableName: !Ref TournamentsTable
 
+  # EventBridge rule for daily penalties - now triggers the main Par6Function
+  DailyPenaltySchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Apply penalty scores for users who missed today's Wordle
+      ScheduleExpression: cron(59 23 * * ? *)  # Run at 11:59 PM UTC every day
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt Par6Function.Arn
+          Id: PenaltyTarget
+  
+  # Permission for EventBridge to invoke the main function
+  PenaltySchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref Par6Function
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt DailyPenaltySchedule.Arn
+
   # Users Table - Store user profiles
   UsersTable:
     Type: AWS::DynamoDB::Table

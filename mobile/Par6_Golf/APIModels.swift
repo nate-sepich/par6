@@ -12,6 +12,11 @@ enum Status: String, Codable, CaseIterable {
     case dnf = "dnf"
 }
 
+enum ScoreType: String, Codable, CaseIterable {
+    case regular = "regular"
+    case penalty = "penalty"
+}
+
 
 struct UserCreate: Codable {
     let handle: String
@@ -65,6 +70,7 @@ struct Score: Codable, Identifiable {
     let guessesUsed: Int?
     let golfScore: Int
     let sourceText: String?
+    let scoreType: ScoreType?
     let createdAt: Date
     let updatedAt: Date
     
@@ -76,6 +82,7 @@ struct Score: Codable, Identifiable {
         case guessesUsed = "guesses_used"
         case golfScore = "golf_score"
         case sourceText = "source_text"
+        case scoreType = "score_type"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
     }

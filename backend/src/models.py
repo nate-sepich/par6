@@ -8,6 +8,29 @@ class Status(str, Enum):
     SOLVED = "solved"
     DNF = "dnf"
 
+class ScoreType(str, Enum):
+    REGULAR = "regular"  # User submitted score
+    PENALTY = "penalty"  # Busy bunker auto-assigned
+
+
+def normalize_score_type(value: Optional[str]) -> "ScoreType":
+    """Normalize legacy or unknown score_type strings to a valid ScoreType.
+
+    Accepted inputs (case-insensitive):
+    - "regular" (or legacy "standard") -> ScoreType.REGULAR
+    - "penalty" -> ScoreType.PENALTY
+    Any other value or None defaults to ScoreType.REGULAR for backward compatibility.
+    """
+    if not value:
+        return ScoreType.REGULAR
+    v = str(value).strip().lower()
+    if v == "penalty":
+        return ScoreType.PENALTY
+    if v in ("regular", "standard"):
+        return ScoreType.REGULAR
+    # Fallback to regular to avoid breaking older data
+    return ScoreType.REGULAR
+
 
 class UserCreate(BaseModel):
     handle: str = Field(..., min_length=3, max_length=24)
@@ -37,6 +60,7 @@ class Score(BaseModel):
     guesses_used: Optional[int]
     golf_score: int
     source_text: Optional[str]
+    score_type: Optional[ScoreType] = ScoreType.REGULAR
     created_at: datetime
     updated_at: datetime
 
@@ -107,10 +131,13 @@ class TournamentFinalResults(BaseModel):
     completed_days: int
 
 
-def calculate_golf_score(status: Status, guesses_used: Optional[int]) -> int:
+def calculate_golf_score(status: Status, guesses_used: Optional[int], is_penalty: bool = False) -> int:
     """Convert Wordle guesses to golf scores according to spec"""
+    if is_penalty:
+        return 8  # Quad bogey (+4) for busy bunker
+    
     if status == Status.DNF:
-        return 4  # Penalty for failing to guess correctly
+        return 8  # Quad bogey (+4) for failing to guess correctly
     
     if guesses_used is None:
         raise ValueError("guesses_used required for solved status")

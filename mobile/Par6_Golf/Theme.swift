@@ -1,61 +1,67 @@
 import SwiftUI
 
 extension Color {
-    static let golfGreen = Color(red: 0.224, green: 0.573, blue: 0.318)
-    static let fairwayGreen = Color(red: 0.318, green: 0.651, blue: 0.408)
-    static let deepGreen = Color(red: 0.141, green: 0.451, blue: 0.259)
-    static let mintGreen = Color(red: 0.533, green: 0.804, blue: 0.643)
-    static let grassGreen = Color(red: 0.471, green: 0.733, blue: 0.549)
+    // Primary golf accent color - minimal use for highlights only
+    static let golfAccent = Color(red: 0.224, green: 0.573, blue: 0.318)
     
-    static let sandTrap = Color(red: 0.929, green: 0.859, blue: 0.749)
-    static let clubGold = Color(red: 0.859, green: 0.729, blue: 0.455)
-    static let trophyGold = Color(red: 0.953, green: 0.816, blue: 0.510)
+    // Score colors for visual feedback
+    static let excellentScore = Color.green
+    static let goodScore = Color(red: 0.318, green: 0.651, blue: 0.408)
+    static let averageScore = Color.orange
+    static let poorScore = Color.red
     
-    static let scoreRed = Color(red: 0.827, green: 0.294, blue: 0.302)
-    static let parOrange = Color(red: 0.945, green: 0.588, blue: 0.275)
+    // Achievement colors
+    static let achievementGold = Color(red: 0.953, green: 0.816, blue: 0.510)
     
-    static let skyBlue = Color(red: 0.518, green: 0.718, blue: 0.890)
-    static let waterHazard = Color(red: 0.329, green: 0.549, blue: 0.753)
+    // Keep legacy colors for backward compatibility but simplified
+    static let golfGreen = golfAccent
+    static let fairwayGreen = goodScore
+    static let scoreRed = poorScore
+    static let parOrange = averageScore
+    static let trophyGold = achievementGold
+    static let mintGreen = Color.mint
+    static let primaryText = Color.primary
+    static let secondaryText = Color.secondary
+}
+
+// MARK: - Clean iOS-Standard Card Style
+struct CleanCardStyle: ViewModifier {
+    var isHighlighted: Bool = false
     
-    static let cardBackground = Color(red: 0.98, green: 0.98, blue: 0.98)
-    static let cardShadow = Color.black.opacity(0.05)
-    
-    static let primaryText = Color(red: 0.102, green: 0.184, blue: 0.122)
-    static let secondaryText = Color(red: 0.376, green: 0.459, blue: 0.396)
-    
-    static var golfGradient: LinearGradient {
-        LinearGradient(
-            colors: [.golfGreen, .fairwayGreen],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-    }
-    
-    static var grassGradient: LinearGradient {
-        LinearGradient(
-            colors: [.deepGreen, .golfGreen, .fairwayGreen],
-            startPoint: .top,
-            endPoint: .bottom
-        )
-    }
-    
-    static var goldGradient: LinearGradient {
-        LinearGradient(
-            colors: [.trophyGold, .clubGold],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-    }
-    
-    static var backgroundGradient: LinearGradient {
-        LinearGradient(
-            colors: [Color(.systemBackground), Color.mintGreen.opacity(0.05)],
-            startPoint: .top,
-            endPoint: .bottom
-        )
+    func body(content: Content) -> some View {
+        content
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color(.systemBackground))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(isHighlighted ? Color.golfAccent : Color(.systemGray5), lineWidth: isHighlighted ? 1.5 : 0.5)
+            )
+            .shadow(color: Color.black.opacity(0.08), radius: 2, x: 0, y: 1)
     }
 }
 
+// MARK: - Clean Stat Card Style
+struct StatCardStyle: ViewModifier {
+    var accentColor: Color = .golfAccent
+    var isHighlighted: Bool = false
+    
+    func body(content: Content) -> some View {
+        content
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color(.systemBackground))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(isHighlighted ? accentColor : Color(.systemGray6), lineWidth: isHighlighted ? 1.5 : 0.5)
+            )
+            .shadow(color: Color.black.opacity(0.04), radius: 2, x: 0, y: 1)
+    }
+}
+
+// MARK: - Button Style (Simplified)
 struct GolfButtonStyle: ButtonStyle {
     var isPrimary: Bool = true
     var isDestructive: Bool = false
@@ -63,57 +69,70 @@ struct GolfButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(.body, design: .rounded, weight: .semibold))
-            .foregroundColor(isPrimary ? .white : (isDestructive ? .scoreRed : .golfGreen))
+            .foregroundColor(isPrimary ? .white : (isDestructive ? .red : .golfAccent))
             .frame(maxWidth: .infinity)
             .padding(.vertical, 14)
             .background(
-                Group {
-                    if isPrimary {
-                        RoundedRectangle(cornerRadius: 16)
-                            .fill(Color.golfGradient)
-                    } else if isDestructive {
-                        RoundedRectangle(cornerRadius: 16)
-                            .stroke(Color.scoreRed.opacity(0.3), lineWidth: 1.5)
-                            .background(
-                                RoundedRectangle(cornerRadius: 16)
-                                    .fill(Color.scoreRed.opacity(0.05))
-                            )
-                    } else {
-                        RoundedRectangle(cornerRadius: 16)
-                            .stroke(Color.golfGreen.opacity(0.3), lineWidth: 1.5)
-                            .background(
-                                RoundedRectangle(cornerRadius: 16)
-                                    .fill(Color.golfGreen.opacity(0.05))
-                            )
-                    }
-                }
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(isPrimary ? Color.golfAccent : Color(.systemBackground))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(isPrimary ? Color.clear : (isDestructive ? Color.red : Color.golfAccent), lineWidth: 1)
+                    )
             )
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
-            .shadow(color: isPrimary ? Color.golfGreen.opacity(0.3) : Color.clear, 
-                   radius: isPrimary ? 8 : 0, x: 0, y: 4)
+            .shadow(color: Color.black.opacity(0.08), radius: isPrimary ? 4 : 0, x: 0, y: isPrimary ? 2 : 0)
     }
 }
 
-struct GolfCardStyle: ViewModifier {
+// MARK: - Reusable Components
+struct CleanStatCard: View {
+    let title: String
+    let value: String
+    let icon: String
+    let accentColor: Color
     var isHighlighted: Bool = false
     
-    func body(content: Content) -> some View {
-        content
-            .background(
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(isHighlighted ? Color.mintGreen.opacity(0.08) : Color.cardBackground)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 16)
-                    .stroke(isHighlighted ? Color.golfGreen.opacity(0.2) : Color.clear, lineWidth: 1)
-            )
-            .shadow(color: .cardShadow, radius: 8, x: 0, y: 2)
+    var body: some View {
+        VStack(spacing: 12) {
+            // Icon or Emoji
+            if icon.count == 1 && icon.unicodeScalars.first?.properties.isEmoji == true {
+                Text(icon)
+                    .font(.system(size: 28))
+            } else {
+                Image(systemName: icon)
+                    .font(.system(size: 24, weight: .medium))
+                    .foregroundColor(accentColor)
+            }
+            
+            Text(value)
+                .font(.title2.weight(.bold))
+                .foregroundColor(.primary)
+            
+            Text(title)
+                .font(.caption.weight(.medium))
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding()
+        .cleanCard(isHighlighted: isHighlighted)
     }
 }
 
+// MARK: - View Extensions
 extension View {
+    func cleanCard(isHighlighted: Bool = false) -> some View {
+        modifier(CleanCardStyle(isHighlighted: isHighlighted))
+    }
+    
+    func statCard(accentColor: Color = .golfAccent, isHighlighted: Bool = false) -> some View {
+        modifier(StatCardStyle(accentColor: accentColor, isHighlighted: isHighlighted))
+    }
+    
+    // Keep legacy method for backward compatibility
     func golfCard(isHighlighted: Bool = false) -> some View {
-        modifier(GolfCardStyle(isHighlighted: isHighlighted))
+        modifier(CleanCardStyle(isHighlighted: isHighlighted))
     }
 }
