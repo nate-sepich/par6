@@ -260,6 +260,13 @@ class APIService: ObservableObject {
         )
     }
     
+    func getPlayerScores(userId: String, startDate: String, endDate: String) async throws -> [Score] {
+        return try await makeRequest(
+            endpoint: "/players/\(userId)/scores?start_date=\(startDate)&end_date=\(endDate)",
+            requiresAuth: true
+        )
+    }
+    
     // MARK: - Leaderboard
     
     func getLeaderboard(startDate: String, endDate: String, limit: Int = 50) async throws -> [LeaderboardEntry] {

@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import uuid
 from boto3.dynamodb.conditions import Key, Attr
 from botocore.exceptions import ClientError
-from models import User, Score, Status, calculate_golf_score, Tournament, TournamentSummary, TournamentStanding, TournamentStatus, TournamentFinalResults
+from models import User, Score, Status, ScoreType, calculate_golf_score, Tournament, TournamentSummary, TournamentStanding, TournamentStatus, TournamentFinalResults, normalize_score_type
 
 class ReadableDynamoDBStorage:
     """
@@ -148,7 +148,8 @@ class ReadableDynamoDBStorage:
     # MARK: - Score Management
     
     def upsert_score(self, user_id: str, puzzle_date: str, status: Status,
-                     guesses_used: Optional[int], source_text: Optional[str]) -> Score:
+                     guesses_used: Optional[int], source_text: Optional[str],
+                     score_type: ScoreType = ScoreType.REGULAR) -> Score:
         """Create or update a score for a user/date combination"""
         
         # Validate input
@@ -157,7 +158,7 @@ class ReadableDynamoDBStorage:
         if status == Status.DNF and guesses_used is not None:
             raise ValueError("DNF status forbids guesses_used")
         
-        golf_score = calculate_golf_score(status, guesses_used)
+        golf_score = calculate_golf_score(status, guesses_used, is_penalty=(score_type == ScoreType.PENALTY))
         now = datetime.utcnow()
         
         try:
@@ -190,6 +191,7 @@ class ReadableDynamoDBStorage:
                 guesses_used=guesses_used,
                 golf_score=golf_score,
                 source_text=source_text,
+                score_type=score_type,
                 created_at=created_at,
                 updated_at=now
             )
@@ -203,6 +205,7 @@ class ReadableDynamoDBStorage:
                 'guesses_used': guesses_used,
                 'golf_score': golf_score,
                 'source_text': source_text,
+                'score_type': score_type.value,
                 'created_at': created_at.isoformat(),
                 'updated_at': now.isoformat()
             })
@@ -234,6 +237,7 @@ class ReadableDynamoDBStorage:
                         guesses_used=item.get('guesses_used'),
                         golf_score=item['golf_score'],
                         source_text=item.get('source_text'),
+                        score_type=normalize_score_type(item.get('score_type', 'regular')),
                         created_at=datetime.fromisoformat(item['created_at']),
                         updated_at=datetime.fromisoformat(item['updated_at'])
                     ))
@@ -987,6 +991,106 @@ class ReadableDynamoDBStorage:
         except ClientError as e:
             print(f"[ERROR] delete_tournament: {e}")
             raise ValueError(f"Error deleting tournament: {e}")
+    
+    # MARK: - Penalty Score Management
+    
+    def insert_penalty_score(self, user_id: str, puzzle_date: str) -> Score:
+        """Insert a penalty score for a user who missed a day"""
+        # Check if user already has a score for this date
+        existing_response = self.scores_table.query(
+            IndexName='UserDateIndex',
+            KeyConditionExpression=Key('user_id').eq(user_id) & Key('puzzle_date').eq(puzzle_date)
+        )
+        
+        if existing_response['Items']:
+            # User already has a score for this date, don't override
+            print(f"[INFO] User {user_id} already has score for {puzzle_date}, skipping penalty")
+            return None
+        
+        # Insert penalty score
+        score_id = self._generate_id()
+        now = datetime.utcnow()
+        golf_score = 8  # Quad bogey
+        
+        score = Score(
+            score_id=score_id,
+            user_id=user_id,
+            puzzle_date=puzzle_date,
+            status=Status.DNF,
+            guesses_used=None,
+            golf_score=golf_score,
+            source_text="Busy Bunker - Missed Day",
+            score_type=ScoreType.PENALTY,
+            created_at=now,
+            updated_at=now
+        )
+        
+        self.scores_table.put_item(Item={
+            'score_id': score_id,
+            'user_id': user_id,
+            'puzzle_date': puzzle_date,
+            'status': Status.DNF.value,
+            'guesses_used': None,
+            'golf_score': golf_score,
+            'source_text': "Busy Bunker - Missed Day",
+            'score_type': ScoreType.PENALTY.value,
+            'created_at': now.isoformat(),
+            'updated_at': now.isoformat()
+        })
+        
+        print(f"[TELEMETRY] penalty_score_inserted: {user_id} {puzzle_date}")
+        return score
+    
+    def get_active_users(self, days_back: int = 7) -> List[str]:
+        """Get list of user IDs who have been active in the last N days"""
+        try:
+            active_users = set()
+            cutoff_date = (datetime.utcnow() - timedelta(days=days_back)).strftime('%Y-%m-%d')
+            
+            # Scan scores table for recent activity
+            scan_kwargs = {
+                'FilterExpression': Attr('puzzle_date').gte(cutoff_date)
+            }
+            response = self.scores_table.scan(**scan_kwargs)
+            
+            while True:
+                for item in response.get('Items', []):
+                    active_users.add(item['user_id'])
+                if 'LastEvaluatedKey' not in response:
+                    break
+                response = self.scores_table.scan(ExclusiveStartKey=response['LastEvaluatedKey'], **scan_kwargs)
+            
+            return list(active_users)
+            
+        except ClientError as e:
+            print(f"[ERROR] get_active_users: {e}")
+            return []
+    
+    def apply_daily_penalties(self, puzzle_date: str) -> int:
+        """Apply penalty scores for all active users who missed today"""
+        try:
+            # Get active users (those who played in last 7 days)
+            active_users = self.get_active_users(days_back=7)
+            penalties_applied = 0
+            
+            for user_id in active_users:
+                # Check if user has score for today
+                existing_response = self.scores_table.query(
+                    IndexName='UserDateIndex',
+                    KeyConditionExpression=Key('user_id').eq(user_id) & Key('puzzle_date').eq(puzzle_date)
+                )
+                
+                if not existing_response['Items']:
+                    # User missed today, apply penalty
+                    self.insert_penalty_score(user_id, puzzle_date)
+                    penalties_applied += 1
+            
+            print(f"[INFO] Applied {penalties_applied} penalty scores for {puzzle_date}")
+            return penalties_applied
+            
+        except Exception as e:
+            print(f"[ERROR] apply_daily_penalties: {e}")
+            return 0
 
 # Global storage instance
 storage = ReadableDynamoDBStorage()
